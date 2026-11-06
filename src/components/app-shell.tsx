@@ -1,3 +1,4 @@
+import { AccountPanel } from "@/components/auth/account-panel";
 import { Brand } from "@/components/brand";
 import { DemoBanner, DemoPill } from "@/components/demo-mode";
 import { MobileNav } from "@/components/mobile-nav";
@@ -13,14 +14,20 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         Skip to content
       </a>
 
-      <aside data-surface="dark" className="sticky top-0 hidden h-dvh flex-col gap-10 bg-forest-900 px-4 py-6 lg:flex">
+      <aside
+        data-surface="dark"
+        className="sticky top-0 hidden h-dvh flex-col gap-8 overflow-y-auto bg-forest-900 px-4 py-6 lg:flex"
+      >
         <Brand />
         <NavLinks />
-        <DemoPill />
+        <div className="flex flex-col gap-3">
+          <AccountPanel />
+          <DemoPill />
+        </div>
       </aside>
 
       <div className="flex min-w-0 flex-col">
-        <MobileNav />
+        <MobileNav account={<AccountPanel />} />
         <DemoBanner />
         <main id="main" tabIndex={-1} className="flex-1 px-5 py-8 outline-none sm:px-8 lg:px-12 lg:py-12">
           <div className="mx-auto max-w-6xl">{children}</div>

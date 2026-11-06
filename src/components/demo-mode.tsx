@@ -12,7 +12,9 @@ export function DemoBanner() {
         <Icon name="flask" className="mt-0.5 size-4 shrink-0 sm:mt-0" />
         <span>
           <strong className="font-semibold">Demonstration mode.</strong> All inquiries, names, and
-          figures are fictional sample data. No email, database, or AI services are connected.
+          figures are fictional sample data. Google sign-in, once set up, uses your real account and
+          stores only sign-in records such as your name and email address. No restaurant data is
+          stored, and no email inbox or AI service is connected.
         </span>
       </p>
     </div>

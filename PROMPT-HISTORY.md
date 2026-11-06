@@ -395,3 +395,251 @@ Add a manually invoked, read-only command that exercises the existing `getPrisma
   - Make the demo banner reflect real connection state.
   - Visual and keyboard UI checks.
   - The dev-only audit advisories.
+
+---
+
+## 006: Google sign-in and sessions with Better Auth (implemented, unverified)
+
+**Date:** 2026-11-06
+**Agent:** Claude Code (Claude Opus 5.5)
+**Branch:** `codex/google-authentication`, from commit `62d83c4`. Nothing staged or committed by the agent.
+
+### Request
+
+Add Google-only sign-in, persistent sessions, working sign-out, and server-side session verification. Use Better Auth with the existing Prisma 7 / Neon setup.
+
+- **Scope exception (approved by the user):** auth endpoints and session reads may use the database before restaurant membership exists. `Restaurant` and `Inquiry` access stays prohibited.
+- **Out of scope:** onboarding, memberships, inquiry CRUD, Gmail, email/password, invitations, and organization switching.
+- **Agent restrictions:** no database connection, no migrations applied, no Google Cloud configuration, no reading of `.env.local`, and no commits.
+
+### Research
+
+- **Bundled Next.js docs:**
+  - Authentication with Cache Components: session reads are request-time and belong behind `<Suspense>`.
+  - `cookies`, `connection`, Route Handlers, `useRouter`/`refresh`, and the instant-navigation guide (validation warns in development only).
+- **Official Better Auth docs** (fetched): Next.js integration, Prisma adapter, Google provider, database schema, sessions, options, security, cookies, and OAuth.
+- **Installed `better-auth` 1.7.18 source**, used to confirm what the docs left unclear:
+  - Core tables and their fields come from `getAuthTables`.
+  - With `generateId: "uuid"` on PostgreSQL, Better Auth omits `id` on insert, so the database layer fills it. Deterministic single-use IDs are formatted as UUIDs.
+  - Default Google scopes: `email`, `profile`, `openid`.
+  - Without a secret, Better Auth falls back to a default secret outside production. This app refuses to start sign-in instead.
+  - Telemetry is off by default.
+  - Cookies are signature-checked before any database lookup.
+  - The Prisma adapter's schema check compares the generated client's data model with the library's expectations, offline.
+  - The `nextCookies()` plugin skips session refresh during Server Component renders.
+  - Direct `auth.api` calls skip Better Auth's origin check. Next.js checks Server Action origins instead.
+
+### Dependency
+
+- **`better-auth` `~1.7.18`** (installed 1.7.18, the current stable release). It peers with Next 14–16 and Prisma 5–7, and bundles `@better-auth/prisma-adapter`.
+  - The tilde keeps upgrades within 1.7.x patches, because minor releases can change the required schema.
+  - It added 18 packages, all from Better Auth's own tree (`@better-auth/*`, `better-call`, `jose`, `kysely`, `nanostores`, `@noble/*`, and others).
+  - No existing package changed version or was removed.
+  - `npm audit --omit=dev` reports 0 vulnerabilities. The full audit still shows the same 8 moderate dev-only advisories.
+- **No test framework:** tests use Node's built-in `node:test` with the existing `tsx`.
+
+### Changes
+
+- **`prisma/schema.prisma`:** added the `User`, `Session`, `Account`, and `Verification` models.
+  - Field names and nullability match Better Auth's core schema.
+  - IDs are `@db.Uuid @default(uuid(7))`, and timestamps are `Timestamptz(3)`, matching the existing models.
+  - Indexes: unique `User.email` and `Session.token`, plus indexes on `Session.userId`, `Account.userId`, and `Verification.identifier`.
+  - Cascade deletes go from `User` to `Session` and `Account`. No relation to `Restaurant` or `Inquiry`.
+  - `Restaurant`, `Inquiry`, and the enums are unchanged. `prisma format` had realigned some `Inquiry` whitespace, and I reverted it so existing lines show zero diff.
+- **`prisma/migrations/20261106140237_add_better_auth/migration.sql`:** generated offline with `prisma migrate diff --from-schema <previous schema from git HEAD> --to-schema prisma/schema.prisma --script`.
+  - No database or shadow database was used.
+  - The initial migration is untouched.
+- **`src/lib/auth-config.ts`** (server-only): checks the five required variables.
+  - Rejects anything missing, any value containing `REPLACE_`, a secret under 32 characters, and a `BETTER_AUTH_URL` that isn't a bare http(s) origin.
+  - Reports problems by variable name only.
+- **`src/lib/auth.ts`** (server-only):
+  - `createAuth(config, prisma)` sets up Better Auth with these options:
+    - Base URL is `BETTER_AUTH_URL`, which is also the only trusted origin.
+    - The Prisma adapter uses `getPrisma()`, with `generateId: "uuid"`.
+    - Email/password is off, and Google uses its default scopes with `prompt: "select_account"`.
+    - `encryptOAuthTokens: true` and `telemetry: { enabled: false }`.
+    - The `nextCookies()` plugin is last.
+  - `getAuth()` creates the instance lazily and reuses it through `globalThis`.
+  - `getSessionUserFromHeaders()` calls `getSession` with `disableRefresh: true` and returns only `{ id, name, email }`.
+  - `handleAuthRequest()` answers 503 while sign-in isn't configured.
+- **`src/app/api/auth/[...all]/route.ts`:** `toNextJsHandler(handleAuthRequest)`, exporting GET and POST.
+- **`src/lib/session.ts`** (server-only): `getSessionUser()` and `requireSessionUser()`.
+  - They take no identity arguments and cache nothing.
+  - They return null when sign-in isn't configured.
+- **`src/lib/account-state.ts`** (server-only): a per-request `cache()` of the account state, shared by the shell and the sign-in page.
+  - Calls `connection()` first, so nothing is decided at build time.
+  - Fails closed to "unavailable" and logs only the error name and code.
+- **`src/lib/auth-actions.ts`:** the `signOutAction` Server Action.
+  - Calls `auth.api.signOut` with the request headers, then redirects to `/sign-in?signed_out=1`.
+  - I first wrote sign-out on the client, but the lint rule against `window.location.assign` flagged it. The Server Action approach also re-renders the layout's account panel.
+- **`src/lib/auth-client.ts`:** `createAuthClient()` from `better-auth/react`, with no options. Used only to start Google sign-in.
+- **`src/components/auth/`:**
+  - `google-sign-in-button.tsx` (client): pending state, an error shown with `role="alert"`, a reset when the page is restored from the back/forward cache, and a server-decided `disabled` state with `aria-describedby`.
+  - `sign-out-button.tsx` (client): a `useActionState` form with pending and error states.
+  - `account-panel.tsx` (server): shows one of four states (setup required, unavailable, signed out with a **Sign in** link, or signed in with name, email, decorative initials, a "real account, data still fictional" note, and sign-out), inside its own `<Suspense>`.
+- **`src/app/sign-in/page.tsx`:**
+  - A static header and a "What signing in does today" list.
+  - A Suspense panel that shows the setup-required notice (variable names, disabled button), the signed-in view, or the sign-in button with fixed-text messages.
+  - Messages cover `?error=` and `?signed_out=1`. The raw error value is never shown.
+- **Shell:**
+  - `app-shell.tsx`: the account panel sits above the demo pill in the sidebar, which now scrolls and uses `gap-8`.
+  - `mobile-nav.tsx`: takes an `account` slot. Activating a link in the drawer's account area closes the drawer, and the drawer now scrolls.
+  - `demo-mode.tsx`: banner copy now says sign-in uses a real account and stores only sign-in records, with no restaurant data, email inbox, or AI.
+- **`.env.example`:** `BETTER_AUTH_SECRET`, `BETTER_AUTH_URL`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, all with placeholders except `BETTER_AUTH_URL="http://localhost:3000"`.
+- **`package.json`:** the `better-auth` dependency, and a `test` script: `node --conditions=react-server --import tsx --test "tests/**/*.test.ts"`.
+- **`tests/auth.test.ts`:** 15 offline tests.
+  - Configuration checks, including the `.env.example` placeholders and values never appearing in messages.
+  - The 503 response and `getAuth` refusal when unconfigured.
+  - The Prisma schema matching Better Auth, plus a negative control.
+  - The session helper returning null for no cookie, client identity headers, a bearer token, unsigned or wrongly signed cookies, and a forged `__Secure-` cookie, all without touching the database.
+  - A control showing that a correctly signed cookie does reach the database guard.
+- **Docs:**
+  - README: status, table, stack, environment variables, a new "Authentication setup" section (the exact callback URI and private steps), the migration note, the data model, project structure, and limitations.
+  - AGENTS.md: current stage, stack, the database-rules exception, a new "Authentication rules" section, client components, and `npm test` for auth changes. The Next.js-managed block is unchanged (checked by script).
+
+### Verification (actual results)
+
+- `npx prisma validate`: valid. `npx prisma generate`: Prisma Client 7.10.1 generated with all six models.
+- **Previous schema check:** `migrate diff --from-empty --to-schema <HEAD schema>` reproduces `20261106081912_init/migration.sql` byte for byte (ignoring CRLF), so the comparison baseline is exactly what Neon development has.
+- **New migration contents:** 4 `CREATE TABLE`, 2 `CREATE UNIQUE INDEX`, 3 `CREATE INDEX`, 2 `ADD FOREIGN KEY ... ON DELETE CASCADE`. No `DROP`, `ALTER` of existing tables, or reference to `Restaurant`, `Inquiry`, or the enums.
+- `npm test`: 15 passed, 0 failed. The control test logs an expected Better Auth `INTERNAL_SERVER_ERROR` when the guard refuses database access.
+- `npm run lint`: passed, exit 0, no warnings (after the sign-out change).
+- `npm run build`: succeeded, exit 0.
+  - Every page is `◐` Partial Prerender (static shell, with the account panel streamed at request time), `/api/auth/[...all]` is `ƒ` Dynamic, and `/icon.svg` is static.
+  - A second build with all auth and database variables set to empty strings in the process environment also succeeded. `@next/env` doesn't override variables that already exist, so `.env.local` values were masked without opening the file.
+- **`next start` with credentials blanked** (scripted checks against port 3123, 27 of 27 passed):
+  - All 8 pages returned 200, and an unknown path returned 404.
+  - The shell showed "Sign-in not set up" on every module page.
+  - `/sign-in` showed "Setup required", listed the five variable names, and rendered the button with `disabled` and `aria-describedby="sign-in-setup"`.
+  - `?error=access_denied` showed the fixed cancel text. `?error=<script>…` showed generic text and wasn't reflected. `?signed_out=1` showed the signed-out status.
+  - GET `/api/auth/get-session`, POST `/api/auth/sign-in/social`, POST `/api/auth/sign-out`, and GET `/api/auth/callback/google` all returned 503 with `Cache-Control: no-store`, even with an invented session cookie.
+  - The server log contained no errors, connection strings, or variable assignments.
+- **Client bundle scan (`.next/static`):** no `GOOGLE_CLIENT_SECRET`, `GOOGLE_CLIENT_ID`, `DATABASE_URL`, Prisma, or Neon adapter code. One chunk contains the *name* `BETTER_AUTH_SECRET` inside Better Auth's own environment-variable helper, which carries no value in the browser.
+- **Not done:** no database connection, no migration applied, no Google Cloud configuration, `.env.local` never opened, and no real secret generated or displayed (tests use a random per-run value that's never printed).
+
+### What is and isn't verified
+
+- **Verified offline:**
+  - Configuration checks and the missing-configuration behavior: UI, endpoints, and build.
+  - The schema matches Better Auth's expectations.
+  - The migration is additive.
+  - The session helper rejects invented identities and forged cookies before any database access.
+  - No secrets in the client bundle.
+- **Not verified (needs the user's private setup):**
+  - Google sign-in end to end, including the consent screen, callback, state and PKCE, and user, account, and session creation.
+  - Session persistence across reloads and browser restarts.
+  - Sign-out, including the Server Action redirect and the account panel update.
+  - The cancel and error redirects from Google.
+  - Token encryption at rest.
+  - The applied migration.
+  - Real-browser behavior: keyboard, focus, screen reader, 360px layout, and the drawer closing on account links.
+  - Any production or HTTPS deployment.
+
+### Open issues
+
+- **Sessions don't roll:** they last 7 days from sign-in, because server reads use `disableRefresh` and nothing else calls the session endpoint. Add a client-side refresh later if rolling sessions are wanted.
+- **Non-UUID IDs:** `@db.Uuid` IDs make Prisma reject a non-UUID ID string with an error instead of "not found". Current auth flows look up sessions by token and accounts by provider ID, so no client-supplied ID reaches an ID lookup today. Keep this in mind when adding endpoints that take IDs.
+- **Account linking:** `Account (providerId, accountId)` has no unique constraint, because Better Auth's core schema doesn't define one. Revisit if more providers are added.
+- **Upgrades:** when upgrading `better-auth`, rerun `npm test`. The schema test catches new required columns.
+- **Still outstanding from earlier entries:**
+  - `NavLinks` `<Suspense>`.
+  - Duplicated stage definitions.
+  - The demo banner is still static copy, though it's now accurate for sign-in.
+  - Visual and keyboard checks.
+  - The dev-only audit advisories.
+  - npm 11 still holds back install scripts for `esbuild`, `prisma`, and `@prisma/engines`.
+
+### Cleanup after independent Codex review (2026-11-06)
+
+An independent Codex review of this entry's implementation found three issues. This cleanup fixes only those three. The implementation results above are preserved as originally recorded, and the corrections below supersede them where they conflict.
+
+**Findings (from the Codex review) and fixes:**
+
+1. **Browser access to provider tokens.** Three Better Auth endpoints were enabled for anyone with a session cookie:
+   - `/get-access-token` returns the decrypted access token and the ID token.
+   - `/refresh-token` refreshes with Google and returns the tokens.
+   - `/account-info` reads the stored tokens, refreshing them with Google if expired, and returns the provider profile.
+
+   The app uses none of them. **Fix:** `disabledPaths: ["/get-access-token", "/refresh-token", "/account-info"]` in `src/lib/auth.ts`.
+   - The library's router answers 404 for these in `onRequest`, before the schema check, rate limiting, session lookup, or any endpoint code.
+   - It strips trailing slashes and query strings before comparing.
+   - Other endpoints (`/list-accounts`, `/get-session`, sign-in, callback, and sign-out) never return token fields. `/list-accounts` strips them in `parseAccountOutput`.
+   - OAuth, cookie, origin, and CSRF protections are unchanged.
+2. **ID-token storage and the encryption claim.**
+   - The installed library's `encryptOAuthTokens` encrypts only `accessToken` and `refreshToken` (`setTokenUtil` in `oauth2/link-account.mjs`). It stores `idToken` in plain text. The original entry and docs overstated the encryption.
+   - **Fix:** `databaseHooks.account.create.before` always sets `idToken: null`. `update.before` does the same whenever an update includes `idToken`, such as the token refresh on each sign-in.
+   - Better Auth merges hook data over the original, so the field has to be set to `null`; leaving it out would keep the original value. The nullable column remains, and the schema and migrations are unchanged.
+   - **Correction to the original research:** in the authorization-code callback, Better Auth doesn't check the Google ID token's signature. Google's `getUserInfo` decodes it. It's trusted because it arrives directly from Google's token endpoint over TLS, in exchange for the code, client secret, and PKCE verifier, which OpenID Connect allows. Signature checks (`verifyProviderIdToken`) apply only to the separate ID-token sign-in path.
+   - Identity is derived in `exchangeOAuthCallback` before `handleOAuthUserInfo` writes the account, so clearing the field afterwards doesn't affect identity or session creation. Google has no `createEndSessionURL`, so sign-out never reads the stored ID token.
+3. **Mobile drawer stayed open after sign-out.**
+   - The drawer is in the root layout and persists across navigation, and the Server Action's `redirect()` gave the client no success signal.
+   - **Fix:** `signOutAction` now returns `{ ok: true }` or `{ ok: false, error }` instead of redirecting. Clearing the cookie in a Server Action still re-renders the current page in the same response, per the bundled `server-actions.md`.
+   - On success only, `SignOutButton` closes the `<dialog>` that contains its own form (`closest("dialog")`, which is null on desktop and on the `/sign-in` page body) and calls `router.replace("/sign-in?signed_out=1")`.
+   - Closing the modal dialog returns focus to the menu button. The App Router only scrolls on navigation and doesn't move focus.
+   - On failure, the drawer stays open and the error stays visible under the button.
+   - No other button or form closes the drawer, and there's no global event mechanism.
+
+**Other changes:**
+- `src/lib/auth.ts`: `createAuthOptions(config, database)` now builds the options, and `createAuth` passes the Prisma adapter to it. Tests run the identical options on Better Auth's bundled in-memory adapter.
+- Corrected comments and docs on what's encrypted, omitted, and disabled: `src/lib/auth.ts`, the `Account` doc comment in `prisma/schema.prisma`, README, AGENTS.md "Authentication rules", and `.env.example`.
+  - The schema change is to a `///` comment only. `prisma migrate diff` between the before and after schemas prints "This is an empty migration."
+  - Migration files are unchanged.
+- README's browser checklist gains a mobile-drawer sign-out check and an optional check that `/api/auth/get-access-token` answers 404.
+
+**Tests added** (`tests/auth.test.ts`, 15 → 24). Network access is now refused by a fetch stub in every test.
+- **Disabled endpoints (3 tests):** `POST /get-access-token`, `POST /refresh-token`, and `GET /account-info`, each also with a trailing slash and a query string. Every request carries a validly signed session cookie and a same-origin `Origin` header. Each answers 404, with no token fields in the body, no database access, and no provider requests.
+- **Other spellings (1 test):** percent-encoded, upper-case, and doubled-slash spellings match no endpoint. This guards the router's exact matching, not `disabledPaths`.
+- **Control (1 test):** the same cookie on the enabled `/list-accounts` does reach the database guard.
+- **Google callback with this app's options (4 tests).** Google's token endpoint is emulated in-process with an RS256 test-key ID token, and the database is Better Auth's bundled in-memory adapter. The tests cover:
+  - Scopes are only `openid email profile`, with no `access_type`, PKCE S256, and the code exchange sends `code_verifier`. Only the token endpoint is contacted.
+  - First sign-in creates the user (name and email from the ID token), an account (`idToken` null; `providerId`, `accountId` = Google subject, `userId`, and `scope` intact; access and refresh tokens stored encrypted and decrypting correctly), and a session that `getSessionUserFromHeaders` resolves.
+  - A second sign-in updates the same account (the access token decrypts to the new value) and `idToken` stays null.
+  - Sign-out through the enabled endpoint deletes the session.
+- **Mutation checks:** temporarily removing `disabledPaths` and both hooks made 5 of the new tests fail. Removing only the update hook made exactly the "later sign-in" test fail. `auth.ts` was restored from a backup and compared byte for byte.
+
+**Verification (actual results):**
+- `npm test`: 24 passed, 0 failed. Better Auth logs two expected errors from the database-guard control tests.
+- `npm run lint`: passed, exit 0, no warnings.
+- `npm run build`: the first attempt failed type-checking on a test-only typing (`decryptOAuthToken` expects `AuthContext`). I fixed it with a typed helper in the test. The rerun succeeded, exit 0, with the same routes as before.
+- `npx prisma validate`: valid.
+- `next start` with credentials blanked: the 27 scripted route checks from the original verification passed again.
+- No browser was available in this session.
+
+**Still unverified:**
+- The real Google flow, because the offline tests emulate Google and prove nothing about the live service.
+- Real sign-out and session persistence.
+- That the drawer actually closes, focus actually returns to the menu button, and the "You've signed out." status is announced, in a real browser and with a screen reader.
+- The disabled endpoints against a real signed-in session.
+- That `idToken` is empty in Neon after a real sign-in.
+- The auth migration is still not applied.
+
+### User verification (reported by the project owner, 2026-11-06)
+
+The project owner performed the live setup and browser checks below and reported the results. Claude didn't perform, observe, or independently confirm any of them, and connected to no service. The implementation and cleanup results above are unchanged.
+
+**Reported by the project owner:**
+- Applied migration `20261106140237_add_better_auth` to the Neon **development** branch. `npx prisma migrate status` then reported the schema up to date.
+- Configured the Google OAuth client credentials and `BETTER_AUTH_SECRET` privately. No values were shared.
+- Real Google sign-in works locally.
+- All requested manual checks passed:
+  - Session persistence after a reload.
+  - Session persistence after a browser restart.
+  - Sign-out on desktop.
+  - Sign-out from the mobile drawer.
+  - Sign-out from the drawer while already on `/sign-in`.
+  - Cancelling at Google, navigating back, and retrying.
+
+**Not reported, so still unverified live:**
+- Stored-token contents in Neon (encrypted `accessToken`, empty `idToken`) and direct requests to the disabled token endpoints. Offline tests cover these (`npm test`), and the project owner didn't report inspecting them.
+- Focus return to the menu button and screen-reader announcements, beyond the drawer sign-out passing.
+
+**Limitations that remain:**
+- Production and Railway authentication are untested.
+- Restaurant membership and tenant authorization aren't implemented.
+- No application page reads or writes `Restaurant` or `Inquiry` records.
+- The dashboard still uses fictional demonstration data.
+- Working authentication doesn't establish inquiry write persistence. Sign-in exercises only the auth tables.
+
+**Documentation updated in this checkpoint:** the README (status, "What exists today" table, Neon status note, Database setup step 5, ownership note, an "Authentication setup" verification note, and limitations) and AGENTS.md (current stage and authentication state; the Next.js-managed block is unchanged).
+- No code, dependency, schema, or migration changes.
+- `npm run lint`, `npm run build`, and `npm test` weren't rerun for this documentation-only update.

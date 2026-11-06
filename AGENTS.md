@@ -18,35 +18,55 @@ Catering Concierge is a catering management SaaS product for independent restaur
 
 ## Current stage
 
-**Foundation plus database schema applied to Neon development.** The UI is a responsive dashboard shell on fictional demonstration data.
+**Foundation, database schema on Neon development, and Google sign-in verified locally against Neon development.** The UI is a responsive dashboard shell on fictional demonstration data.
 
 **Database state:**
-- **Code:** the Prisma 7 schema (`Restaurant`, `Inquiry`), an initial SQL migration, and a server-only client in `src/lib/db.ts`.
+- **Code:** the Prisma 7 schema (`Restaurant`, `Inquiry`, plus the auth models `User`, `Session`, `Account`, `Verification`), two SQL migrations, and a server-only client in `src/lib/db.ts`.
 - **Applied (reported by the project owner):** the user applied migration `20261106081912_init` to the Neon **development** branch. `prisma migrate status` reports the schema is up to date, which verifies the CLI's direct connection (`DIRECT_URL`).
 - **Verified by `npm run db:check` (2026-11-06):** the app's pooled connection (`DATABASE_URL`) through `getPrisma()`, with read-only `COUNT` queries on `Restaurant` and `Inquiry`.
-- **Not tested or not implemented:** write persistence, record creation and editing, authentication, and tenant authorization.
-- No page, route, or action reads or writes database records. The dashboard still shows fictional demonstration data.
+- **Applied (reported by the project owner):** migration `20261106140237_add_better_auth` (auth tables only) on Neon development. `prisma migrate status` reports the schema up to date.
+- **Not tested or not implemented:** restaurant or inquiry write persistence, record creation and editing, restaurant membership, and tenant authorization. Working sign-in exercises only the auth tables.
+- No page, route, or action reads or writes `Restaurant` or `Inquiry` records. The dashboard still shows fictional demonstration data.
 - The migration and connection checks cover Neon development only. No production application has been deployed.
 
-There is no authentication, authorization, Gmail integration, or AI API usage. See `PROMPT-HISTORY.md` for what each task delivered.
+**Authentication state:** Google-only sign-in with Better Auth (`src/lib/auth.ts`, `/api/auth/[...all]`, `/sign-in`).
+- Implemented and covered by offline tests (`npm test`).
+- **Verified locally by the user (2026-11-06), against Neon development:** the user configured the credentials and secret privately and passed these manual browser checks: sign-in with a real Google account; staying signed in after a reload and after a browser restart; sign-out on desktop, from the mobile drawer, and from the drawer while already on `/sign-in`; and cancelling at Google, going back, and retrying.
+- **Not verified live:** stored-token contents and the disabled token endpoints (offline tests only), focus and screen-reader behavior, and any production or Railway environment.
+- Without configuration, the UI shows "Sign-in not set up", the sign-in button is disabled, and `/api/auth/*` answers 503.
+
+There is no authorization, restaurant membership, Gmail integration, or AI API usage. See `PROMPT-HISTORY.md` for what each task delivered.
 
 ## Stack
 
 - Next.js 16 App Router with Turbopack, `cacheComponents` and `partialPrefetching` enabled
 - React 19, TypeScript (strict), Tailwind CSS v4 (CSS-first `@theme` tokens in `src/app/globals.css`)
 - Prisma ORM 7.10 (`prisma-client` generator, output to the git-ignored `src/generated/prisma`) with `@prisma/adapter-neon` for Neon PostgreSQL. CLI config lives in `prisma7.config.ts`. Keep `prisma`, `@prisma/client`, and `@prisma/adapter-neon` on the same 7.x version. npm's `prisma@latest` currently points to an 8.x release candidate.
+- Better Auth 1.7 (`better-auth`, pinned `~1.7.18`) for Google sign-in and database sessions, through its Prisma adapter and the app's `getPrisma()`
 - Later stages: OpenAI API, Gmail API (OAuth), Railway deployment
 
 ## Database rules
 
 - Use `getPrisma()` from `src/lib/db.ts` only in server code. It imports `server-only`, so never import it from client components.
 - `DATABASE_URL` (pooled) is for the app runtime. `DIRECT_URL` (direct) is for the Prisma CLI.
-- `npm run db:check` (`scripts/db-check.ts`) is the only code that runs `getPrisma()` today.
-  - It's manual, read-only, and runs under `--conditions=react-server`, so `server-only` stays real.
-  - Keep it out of install, lint, and build.
-  - Run it only when the user authorizes a database connection.
+- `getPrisma()` runs in two places today:
+  - Better Auth (`src/lib/auth.ts`), which reads and writes only the auth tables.
+  - `npm run db:check` (`scripts/db-check.ts`). It's manual, read-only, and runs under `--conditions=react-server`, so `server-only` stays real. Keep it out of install, lint, and build. Run it only when the user authorizes a database connection.
 - **Ownership is not authorization.** `Inquiry.restaurantId` records ownership only. Before exposing any database-backed page, route, or action, authenticated restaurant selection and restaurant-scoped queries must exist. Don't claim tenant isolation until they do.
+  - **Narrow exception (approved by the user):** the Better Auth endpoints (`/api/auth/*`) and server-side session reads may use the database before restaurant membership exists. Nothing else may. `Restaurant` and `Inquiry` access stays prohibited.
+- Auth models follow Better Auth's core schema. When upgrading `better-auth`, run `npm test`: it checks offline that `prisma/schema.prisma` still matches the library. Don't run `npx auth generate` against this schema, because it rewrites the file.
 - Agents must not apply migrations, run `db push` or `migrate reset`, seed, or connect to a database unless the user explicitly asks. Create new migrations with the user, or offline with `prisma migrate diff`. Never fabricate migration history.
+
+## Authentication rules
+
+- Trusted identity comes only from `getSessionUser()` / `requireSessionUser()` in `src/lib/session.ts` (server-only). Never accept a user ID or email from the client, and never trust `authClient` results for authorization.
+- Session reads are request-time and uncached. Keep them inside `<Suspense>`, and don't put them in `"use cache"` scopes.
+- Google sign-in requests only the default identity scopes (`openid`, `email`, `profile`). Adding Gmail scopes or offline access is a separate, explicitly approved task.
+- Provider tokens stay on the server. Never log them or send them to the browser.
+  - Access and refresh tokens are encrypted at rest (`account.encryptOAuthTokens`).
+  - That option doesn't cover ID tokens, so the `account` database hooks in `src/lib/auth.ts` clear `idToken` on every write.
+  - `/get-access-token`, `/refresh-token`, and `/account-info` are disabled (`disabledPaths`). Don't re-enable them, or add endpoints that return tokens, without explicit approval.
+- Configuration decisions happen on the server (`src/lib/auth-config.ts`). Client components receive flags and variable names only, never values.
 
 ## Non-negotiable requirements
 
@@ -59,7 +79,7 @@ There is no authentication, authorization, Gmail integration, or AI API usage. S
 
 ## Conventions
 
-- Server Components by default. Add `"use client"` only for interactivity or browser APIs (currently `nav-links.tsx` and `mobile-nav.tsx`).
+- Server Components by default. Add `"use client"` only for interactivity or browser APIs (currently `nav-links.tsx`, `mobile-nav.tsx`, and the sign-in and sign-out buttons in `src/components/auth/`).
 - Use the `@/*` import alias for `src/*`.
 - Use the theme tokens (`forest-*`, `brass-*`, `ivory`, `cream`, `linen`, `sand`, `ink`, `muted`; `font-display` for headings; `shadow-card` / `shadow-card-raised` for card shadows). Avoid ad-hoc hex or rgba values in components.
 - Icons are inline SVGs in `src/components/icons.tsx`. Don't add an icon library for a few glyphs.
@@ -74,6 +94,8 @@ Any agent that **implements** changes, including fixes approved after a review, 
 npm run lint
 npm run build
 ```
+
+When a change touches authentication, the schema, or `src/lib/auth*.ts`, also run `npm test` (offline; no database or credentials).
 
 Report failures honestly. Don't claim a check passed without running it.
 

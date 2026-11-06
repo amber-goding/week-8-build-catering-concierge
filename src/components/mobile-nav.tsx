@@ -11,8 +11,10 @@ import { NavLinks } from "@/components/nav-links";
  * The drawer appears and disappears instantly (no animation).
  * Uses a native modal <dialog>, which provides focus containment,
  * Escape-to-close, and an inert background without extra dependencies.
+ *
+ * `account` is the server-rendered account panel, passed in from AppShell.
  */
-export function MobileNav() {
+export function MobileNav({ account }: { account: React.ReactNode }) {
   const dialogRef = useRef<HTMLDialogElement>(null);
 
   const open = () => dialogRef.current?.showModal();
@@ -54,7 +56,7 @@ export function MobileNav() {
         }}
         className="m-0 h-dvh max-h-none w-80 max-w-[85vw] bg-forest-900 p-0 text-ivory backdrop:bg-forest-900/60 lg:hidden"
       >
-        <div className="flex h-full flex-col gap-8 px-4 py-4">
+        <div className="flex h-full flex-col gap-8 overflow-y-auto px-4 py-4">
           <div className="flex items-center justify-between">
             <Brand onNavigate={close} />
             <button
@@ -67,7 +69,17 @@ export function MobileNav() {
             </button>
           </div>
           <NavLinks onNavigate={close} />
-          <DemoPill />
+          {/* The account panel is server-rendered, so its links can't take onNavigate.
+              Close the drawer when any link inside it is activated (click or Enter). */}
+          <div
+            className="flex flex-col gap-3"
+            onClick={(event) => {
+              if ((event.target as HTMLElement).closest("a")) close();
+            }}
+          >
+            {account}
+            <DemoPill />
+          </div>
         </div>
       </dialog>
     </header>

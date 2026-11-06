@@ -8,6 +8,10 @@
 // owns a row. Nothing in this schema restricts who can read or change it.
 // Authenticated restaurant selection and restaurant-scoped queries must exist
 // before any database-backed route or action is exposed.
+//
+// Authentication models (User, Session, Account, Verification) are at the end.
+// A signed-in User has no relation to any Restaurant: signing in grants no
+// access to restaurant or inquiry data.
 
 generator client {
   provider = "prisma-client"
@@ -66,4 +70,81 @@ model Inquiry {
   @@index([restaurantId, stage, createdAt])
   @@index([restaurantId, createdAt])
   @@index([restaurantId, eventDate])
+}
+
+// ---------------------------------------------------------------------------
+// Authentication (Better Auth 1.7, Google sign-in only)
+//
+// Field names and required/optional settings follow Better Auth's core schema
+// for user, session, account, and verification. tests/auth.test.ts compares
+// the generated client against the library's expectations offline.
+//
+// IDs: the auth config sets advanced.database.generateId = "uuid". On
+// PostgreSQL that makes Better Auth omit `id` on insert, so Prisma Client
+// fills it from @default(uuid(7)), the same as Restaurant and Inquiry.
+// ---------------------------------------------------------------------------
+
+/// A person who has signed in with Google. Not linked to any restaurant.
+model User {
+  id            String    @id @default(uuid(7)) @db.Uuid
+  name          String
+  email         String    @unique
+  emailVerified Boolean   @default(false)
+  image         String?
+  createdAt     DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt     DateTime  @default(now()) @updatedAt @db.Timestamptz(3)
+  sessions      Session[]
+  accounts      Account[]
+}
+
+/// A signed-in browser session. The cookie carries a signed copy of `token`.
+model Session {
+  id        String   @id @default(uuid(7)) @db.Uuid
+  token     String   @unique
+  expiresAt DateTime @db.Timestamptz(3)
+  ipAddress String?
+  userAgent String?
+  userId    String   @db.Uuid
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  @@index([userId])
+}
+
+/// A sign-in method linked to a user. Today only Google (providerId "google",
+/// accountId = Google's subject ID). Better Auth encrypts accessToken and
+/// refreshToken before storage (account.encryptOAuthTokens). idToken stays
+/// NULL: the app clears it before every write (see omitIdToken in src/lib/auth.ts).
+/// The endpoints that would return tokens to the browser are disabled.
+model Account {
+  id                    String    @id @default(uuid(7)) @db.Uuid
+  accountId             String
+  providerId            String
+  userId                String    @db.Uuid
+  user                  User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  accessToken           String?
+  refreshToken          String?
+  idToken               String?
+  accessTokenExpiresAt  DateTime? @db.Timestamptz(3)
+  refreshTokenExpiresAt DateTime? @db.Timestamptz(3)
+  scope                 String?
+  /// Part of Better Auth's core schema. Unused: email/password sign-in is disabled.
+  password              String?
+  createdAt             DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt             DateTime  @updatedAt @db.Timestamptz(3)
+
+  @@index([userId])
+}
+
+/// Short-lived values Better Auth verifies later, such as OAuth sign-in state.
+model Verification {
+  id         String   @id @default(uuid(7)) @db.Uuid
+  identifier String
+  value      String
+  expiresAt  DateTime @db.Timestamptz(3)
+  createdAt  DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt  DateTime @default(now()) @updatedAt @db.Timestamptz(3)
+
+  @@index([identifier])
 }
