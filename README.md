@@ -5,8 +5,8 @@ Catering Concierge is a catering management product for independent restaurants.
 > **Status: foundation plus database schema applied to Neon development.** The UI is a responsive dashboard shell running on **fictional demonstration data**. The Prisma schema and server-only client are in place.
 >
 > - The initial migration has been applied to the Neon development branch, and the Prisma CLI's direct connection is verified.
-> - **The app's pooled connection and `getPrisma()` are untested.**
-> - **No page reads or writes database records.**
+> - The app's **pooled** connection through `getPrisma()` is verified with read-only `COUNT` queries on both tables (`npm run db:check`, 2026-11-06).
+> - **No page reads or writes database records.** Creating and editing records, authentication, and tenant authorization aren't implemented, and write persistence hasn't been tested.
 > - No email account or AI service is connected.
 
 ## What exists today
@@ -18,7 +18,7 @@ Catering Concierge is a catering management product for independent restaurants.
 | Inquiry pipeline preview | Demo only. Read-only fictional inquiries |
 | Demonstration-mode indicator | Shown on every page |
 | Inquiries, Email, Menu, Quotes, Events, Settings | Routes exist and show planned scope. **No functionality** |
-| Database layer (Prisma 7 + Neon) | Schema migrated to Neon development, and the CLI's direct connection is verified. The app's pooled connection and `getPrisma()` are **untested**. No page reads or writes records |
+| Database layer (Prisma 7 + Neon) | Schema migrated to Neon development. The CLI's direct connection and the app's pooled connection (`getPrisma()`, read-only counts) are verified. **No page reads or writes records**, and writes are untested |
 
 The sample records live in [`src/lib/demo-data.ts`](src/lib/demo-data.ts). They use the "Example" surname and contain no pricing or revenue figures.
 
@@ -55,6 +55,7 @@ Other scripts:
 npm run lint       # ESLint (next/core-web-vitals + TypeScript rules)
 npm run build      # prisma generate, then the production build (includes type checking)
 npm run start      # Serve the production build
+npm run db:check   # Manual, read-only database connectivity check (needs .env.local; see below)
 ```
 
 The app runs and builds **without any environment variables**, because no page uses the database yet. [`.env.example`](.env.example) lists the variables the database layer uses, with placeholders only. Real values belong in `.env.local`, which git ignores.
@@ -73,7 +74,8 @@ These steps connect the code to a Neon database. They're written for PowerShell,
 > **Neon development status (reported by the project owner, 2026-11-06):**
 > - Against the Neon **development** branch, `DATABASE_URL` and `DIRECT_URL` were added privately to `.env.local`, and `npx prisma migrate status` ran successfully.
 > - `npx prisma migrate deploy` applied `20261106081912_init`, and a follow-up `npx prisma migrate status` reported "Database schema is up to date!".
-> - This verifies the CLI's **direct** connection (`DIRECT_URL`) only. The app's **pooled** connection (`DATABASE_URL`) and `getPrisma()` haven't been exercised.
+> - This verifies the CLI's **direct** connection (`DIRECT_URL`).
+> - The app's **pooled** connection (`DATABASE_URL`) through `getPrisma()` was later verified with `npm run db:check` (read-only counts, both tables returned 0 rows).
 > - No other environment (production, Railway) has been set up.
 >
 > Repeat the steps below for any new environment.
@@ -106,6 +108,26 @@ These steps connect the code to a Neon database. They're written for PowerShell,
 
 For later schema changes, edit `prisma/schema.prisma` and run `npx prisma migrate dev --name <short-description>` against a development database. `migrate dev` uses a temporary shadow database. If the database role can't create databases, set `shadowDatabaseUrl` in `prisma7.config.ts`.
 
+### Verify the database connection (read-only)
+
+```powershell
+npm run db:check
+```
+
+This runs [`scripts/db-check.ts`](scripts/db-check.ts) with `node --conditions=react-server --import tsx`.
+
+- **What it does:**
+  - Loads `.env*` files with `@next/env`, the same loader as Next.js and `prisma7.config.ts`.
+  - Calls the app's own `getPrisma()` with the **pooled** `DATABASE_URL`, and fails if that host isn't a Neon `-pooler` endpoint. It never uses `DIRECT_URL`.
+  - Runs `COUNT` queries on `Restaurant` and `Inquiry`.
+  - Closes the connection when it finishes.
+- **What it never does:** read individual records, write anything, change the schema, or touch any database other than the one in `DATABASE_URL`.
+- **How it's bounded:** `src/lib/db.ts` sets a 10s connection timeout and a 15s query timeout, and the script gives up after 45s overall.
+- **Why the `react-server` condition:** it lets `db.ts` keep its real `server-only` import, which resolves to an empty module under that condition. It isn't mocked.
+- **On success:** it prints `PASS` with the row counts and exits 0.
+- **On failure:** it prints `FAIL` and a sanitized category (error type, Prisma, SQLSTATE or errno code, and a likely cause) and exits 1. It never prints connection strings, hostnames, credentials, raw database errors, or record contents.
+- **Kept separate:** it isn't part of `npm install`, `npm run lint`, or `npm run build`. None of those need database access.
+
 Other offline commands (no database connection needed):
 
 ```powershell
@@ -136,13 +158,15 @@ prisma/
   schema.prisma        Restaurant and Inquiry models, plus enums
   migrations/          Version-controlled SQL migrations (init applied to Neon development only)
 prisma7.config.ts      Prisma CLI config: schema path, migrations path, DIRECT_URL, env loading
+scripts/
+  db-check.ts          Manual, read-only pooled-connection check (`npm run db:check`)
 src/
   app/                 Routes (App Router). page.tsx is the dashboard.
     <module>/page.tsx  Placeholder pages for planned modules
   components/          App shell, navigation, and shared UI primitives
   generated/prisma/    Generated Prisma Client (git-ignored; created by `prisma generate`)
   lib/
-    db.ts              Server-only, lazily created Prisma client (not imported anywhere yet)
+    db.ts              Server-only, lazily created Prisma client with bounded timeouts (used only by scripts/db-check.ts; no page imports it)
     navigation.ts      Nav items and each module's status (preview / planned)
     demo-data.ts       Fictional sample inquiries (remove when real data exists)
 ```
@@ -150,16 +174,17 @@ src/
 ## Current limitations
 
 - No persistence in the app and no authentication.
-  - The initial migration is applied to the Neon development branch, and the CLI's direct connection works.
-  - The app's pooled connection (`DATABASE_URL`) and `getPrisma()` are untested.
+  - The initial migration is applied to the Neon development branch.
+  - The CLI's direct connection and the app's pooled connection are verified, but only with read-only counts (`npm run db:check`).
   - No page reads or writes database records, and the dashboard still shows fictional demonstration data to every visitor.
+  - Creating or editing records isn't implemented, and write persistence hasn't been tested.
 - No authorization or tenant isolation. The required restaurant relation only records ownership.
 - No email, web form, or AI integration. Source labels in the pipeline are illustrative.
 - Inquiries cannot be opened, created, edited, or moved between stages.
 - Light theme only.
 - No automated tests yet. Verification is lint plus a production build.
 - `npm audit` reports moderate advisories in the ESLint/TypeScript-ESLint dev toolchain. They don't affect the runtime bundle.
-- npm 11 holds back the install scripts of `prisma` and `@prisma/engines` until you approve them (`npm approve-scripts`). Locally on Windows, the CLI works without them because the schema-engine binary ships in the package. Whether a Linux build environment such as Railway needs them hasn't been checked.
+- npm 11 holds back the install scripts of `prisma`, `@prisma/engines`, and `esbuild` (used by `tsx`) until you approve them (`npm approve-scripts`). Locally on Windows, the Prisma CLI and `tsx` work without them. Whether a Linux build environment such as Railway needs them hasn't been checked.
 
 ## Contributor and agent guidance
 

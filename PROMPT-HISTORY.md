@@ -292,3 +292,106 @@ The project owner reported completing these steps against the **Neon development
 - Any environment other than Neon development, such as production or Railway.
 
 A documentation-only follow-up (2026-11-06) updated the current-state sections of `README.md` and `AGENTS.md` to match. Lint and build were not rerun for that change.
+
+---
+
+## 005: Read-only database verification (`npm run db:check`)
+
+**Date:** 2026-11-06
+**Agent:** Claude Code (Claude Opus 5.5)
+**Branch:** `codex/database-verification`, from commit `d413478`. Nothing staged or committed by the agent.
+
+### Request and authorization
+
+Add a manually invoked, read-only command that exercises the existing `getPrisma()` with the pooled `DATABASE_URL` and counts `Restaurant` and `Inquiry` rows:
+
+- Print a concise success message, or exit nonzero with a sanitized message.
+- Close the connection when finished.
+- Keep the command out of install, lint, and build.
+- Keep `server-only` real by running under the `react-server` condition.
+- Bound the timeouts.
+
+**Authorization (from the user):** connect to the existing Neon **development** database through `DATABASE_URL` and run read-only queries. This excluded writing data, changing the schema, and accessing other environments. Runtime loading of `.env.local` was allowed, but its contents could not be opened, inspected, or printed.
+
+### Research
+
+- **Bundled Next.js docs:** the environment-variables guide, which recommends `@next/env` `loadEnvConfig` outside the Next.js runtime.
+- **Installed `@neondatabase/serverless` 1.2.0** (types and implementation):
+  - `connectionTimeoutMillis` and `query_timeout` are client-side, pg-compatible Pool options that the driver honours.
+  - `statement_timeout` is sent as a startup parameter, so I avoided it because Neon's pooler may reject it.
+- **Installed `@prisma/adapter-neon` 7.10.1:** `PrismaNeon` takes a `neon.PoolConfig`.
+- **Installed Prisma runtime:** `$disconnect()` stops the engine. Driver failures are wrapped with a `P####` code and `meta.driverAdapterError.cause.kind`, but their message text can include server details.
+- **`server-only` package:** exports `react-server` → `empty.js`, and the default export throws.
+- **`@next/env`:** `loadEnvConfig` returns file contents, so the script never prints its return value.
+
+### Changes
+
+- **`scripts/db-check.ts`** (new):
+  - Loads env with `@next/env` using a silent logger, and prints only the basenames of loaded files.
+  - Fails if `DATABASE_URL`'s host isn't a Neon `-pooler` endpoint. It prints only yes/no, never the host.
+  - Calls `getPrisma()`, then runs `prisma.restaurant.count()` and `prisma.inquiry.count()`.
+  - Prints `OK`/`PASS` with the counts.
+  - Calls `$disconnect()` in `finally`.
+  - A 45s watchdog acts as a backstop.
+  - On failure it prints only whitelisted fields: error type or constructor name, `P####`/SQLSTATE/errno codes, and the driver error kind, plus a fixed hint. Messages are pattern-matched but never printed.
+- **`src/lib/db.ts`:** the `PrismaNeon` config now sets `connectionTimeoutMillis: 10_000` and `query_timeout: 15_000`. The `server-only` import and the lazy, env-checked creation are unchanged.
+- **`package.json`:**
+  - New script `"db:check": "node --conditions=react-server --import tsx scripts/db-check.ts"`. Install, lint, and build don't reference it.
+  - New dev dependency `tsx@^4.23.15` (installed 4.23.15, with esbuild 0.28.2).
+  - Why tsx: Node 24's built-in type stripping can't load this code. The generated Prisma client uses extensionless ESM imports (`./enums`), and `db.ts` uses the `@/` tsconfig alias. tsx handles both.
+  - I added no testing framework. The lockfile shows no version changes or removals for existing packages.
+- **README.md:**
+  - Status, the what-exists table, and the scripts list.
+  - A new "Verify the database connection (read-only)" section with the exact command, what it does and doesn't do, its timeouts, and its exit codes.
+  - The Neon status note, project structure, limitations, and the install-scripts note, which now includes esbuild.
+- **AGENTS.md:** the current-stage database state, and a `db:check` rule in "Database rules". The Next.js-managed block is unchanged.
+
+### Verification (actual results)
+
+- **Pre-checks before connecting:** `npx tsc --noEmit` passed and `npm run lint` passed.
+- **Condition check** (temporary file in the repo root, then deleted):
+  - With `--conditions=react-server`, `server-only` resolved to its empty module.
+  - Without the condition, it threw "This module cannot be imported from a Client Component module".
+- **Sanitized failure paths** (non-secret placeholder `DATABASE_URL` values, using the reserved `.invalid` TLD; `process.env` overrides `.env.local`):
+  - A non-pooler host printed `FAIL DATABASE_URL is not a Neon pooled endpoint …` and exited 1.
+  - An unresolvable pooler-shaped host printed `FAIL while counting Restaurant rows: type ErrorEvent. Likely cause: the WebSocket connection to the database failed (network, DNS, or TLS).` and exited 1.
+  - Neither printed a URL or hostname.
+  - A temporary diagnostic script (deleted afterwards) showed that the driver surfaces connection failures as a WebSocket `ErrorEvent`, not an `Error`. The sanitizer was adjusted for that.
+- **Real run against Neon development:** `npm run db:check` printed:
+  ```
+  Catering Concierge database check (read-only, pooled DATABASE_URL)
+  Environment files loaded: .env.local
+  OK   pooled connection established (Neon pooler endpoint)
+  OK   Restaurant count query succeeded (0 rows)
+  OK   Inquiry count query succeeded (0 rows)
+  PASS Pooled application connection and read-only queries on both tables work. No data was written.
+  ```
+  It exited 0 after about 2.7s wall time, so the process ended on its own after `$disconnect()`.
+- `npm run lint`: passed (exit 0).
+- `npm run build` (`prisma generate && next build`): succeeded (exit 0). All routes are unchanged and static, and no Prisma, Neon, or `db-check` code appears in `.next/` output.
+- `npm audit`: still 8 moderate, all in dev tooling. `npm audit --omit=dev` reports 0.
+- **Not done:** no migrations, seeding, inserts, updates, deletes, resets, introspection, or `DIRECT_URL` use. No environment other than Neon development was touched, and `.env.local` was never opened or printed.
+
+### What is and isn't verified
+
+- **Verified:** the app's pooled connection (`DATABASE_URL`) through `getPrisma()` reaches Neon development, and read-only `COUNT` queries on `Restaurant` and `Inquiry` succeed. Both tables had 0 rows.
+- **Not verified:**
+  - The timeout paths: the 10s connection timeout, 15s query timeout, and 45s watchdog were configured but not triggered.
+  - Write persistence.
+  - Behavior under load.
+  - Any production or Railway environment.
+- **Not implemented:**
+  - Application pages still use fictional demonstration data.
+  - Record creation and editing.
+  - Authentication.
+  - Tenant authorization or isolation.
+
+### Open issues
+
+- **Install scripts:** npm 11 holds back the install scripts for `esbuild` (via tsx), `prisma`, and `@prisma/engines`. Everything works locally on Windows without them. Linux and Railway are unchecked.
+- **Still outstanding from earlier entries:**
+  - Wrap `NavLinks` in `<Suspense>` before adding dynamic routes.
+  - Separate the inquiry definitions from `demo-data.ts`, which the Prisma enums duplicate.
+  - Make the demo banner reflect real connection state.
+  - Visual and keyboard UI checks.
+  - The dev-only audit advisories.

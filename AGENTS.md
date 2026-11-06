@@ -23,9 +23,10 @@ Catering Concierge is a catering management SaaS product for independent restaur
 **Database state:**
 - **Code:** the Prisma 7 schema (`Restaurant`, `Inquiry`), an initial SQL migration, and a server-only client in `src/lib/db.ts`.
 - **Applied (reported by the project owner):** the user applied migration `20261106081912_init` to the Neon **development** branch. `prisma migrate status` reports the schema is up to date, which verifies the CLI's direct connection (`DIRECT_URL`).
-- **Untested:** the app's pooled connection (`DATABASE_URL`) and `getPrisma()`.
+- **Verified by `npm run db:check` (2026-11-06):** the app's pooled connection (`DATABASE_URL`) through `getPrisma()`, with read-only `COUNT` queries on `Restaurant` and `Inquiry`.
+- **Not tested or not implemented:** write persistence, record creation and editing, authentication, and tenant authorization.
 - No page, route, or action reads or writes database records. The dashboard still shows fictional demonstration data.
-- No other environment (production, Railway) has a database.
+- The migration and connection checks cover Neon development only. No production application has been deployed.
 
 There is no authentication, authorization, Gmail integration, or AI API usage. See `PROMPT-HISTORY.md` for what each task delivered.
 
@@ -40,6 +41,10 @@ There is no authentication, authorization, Gmail integration, or AI API usage. S
 
 - Use `getPrisma()` from `src/lib/db.ts` only in server code. It imports `server-only`, so never import it from client components.
 - `DATABASE_URL` (pooled) is for the app runtime. `DIRECT_URL` (direct) is for the Prisma CLI.
+- `npm run db:check` (`scripts/db-check.ts`) is the only code that runs `getPrisma()` today.
+  - It's manual, read-only, and runs under `--conditions=react-server`, so `server-only` stays real.
+  - Keep it out of install, lint, and build.
+  - Run it only when the user authorizes a database connection.
 - **Ownership is not authorization.** `Inquiry.restaurantId` records ownership only. Before exposing any database-backed page, route, or action, authenticated restaurant selection and restaurant-scoped queries must exist. Don't claim tenant isolation until they do.
 - Agents must not apply migrations, run `db push` or `migrate reset`, seed, or connect to a database unless the user explicitly asks. Create new migrations with the user, or offline with `prisma migrate diff`. Never fabricate migration history.
 

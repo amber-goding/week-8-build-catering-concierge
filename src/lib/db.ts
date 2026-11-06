@@ -23,6 +23,11 @@ const globalForPrisma = globalThis as typeof globalThis & {
   __cateringConciergePrisma?: PrismaClient;
 };
 
+/** Max time to establish a pooled connection (allows for a Neon compute cold start). */
+const CONNECTION_TIMEOUT_MS = 10_000;
+/** Max time for a single query to return. */
+const QUERY_TIMEOUT_MS = 15_000;
+
 function createPrismaClient(): PrismaClient {
   const connectionString = process.env.DATABASE_URL;
 
@@ -39,7 +44,17 @@ function createPrismaClient(): PrismaClient {
     );
   }
 
-  return new PrismaClient({ adapter: new PrismaNeon({ connectionString }) });
+  return new PrismaClient({
+    adapter: new PrismaNeon({
+      connectionString,
+      // Bounded waits so an unreachable database fails instead of hanging.
+      // Both are client-side options of the Neon driver's pg-compatible Pool,
+      // so they work through Neon's pooler (unlike `statement_timeout`, which
+      // is sent as a startup parameter).
+      connectionTimeoutMillis: CONNECTION_TIMEOUT_MS,
+      query_timeout: QUERY_TIMEOUT_MS,
+    }),
+  });
 }
 
 export function getPrisma(): PrismaClient {
