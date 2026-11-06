@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { Suspense } from "react";
 import { SignOutButton } from "@/components/auth/sign-out-button";
-import { getAccountState } from "@/lib/account-state";
+import { getAccountState, type RestaurantState } from "@/lib/account-state";
 
 /**
  * Account panel for the dark sidebar and mobile drawer. It reads the session
@@ -81,12 +81,44 @@ async function AccountPanelContent() {
                 </p>
               </div>
             </div>
-            <p className="mt-2 text-[11px] leading-snug text-forest-200">
-              Your real account. Restaurant data shown is still fictional.
-            </p>
           </div>
+          <RestaurantSummary state={state.restaurant} />
+          <p className="text-[11px] leading-snug text-forest-200">
+            Your account and restaurant are real. The inquiries shown are fictional samples.
+          </p>
           <SignOutButton tone="dark" />
         </div>
+      );
+  }
+}
+
+/** The signed-in user's restaurant, shown only to its member, or a link to set one up. */
+function RestaurantSummary({ state }: { state: RestaurantState }) {
+  switch (state.kind) {
+    case "member":
+      return (
+        <div className="border-t border-forest-700 pt-3 text-xs leading-snug">
+          <p className="text-[11px] font-semibold uppercase tracking-wider text-forest-200">Your restaurant</p>
+          <p className="mt-1 break-words text-sm font-medium text-ivory">{state.restaurant.name}</p>
+        </div>
+      );
+    case "needs-setup":
+      return (
+        <div className="flex flex-col gap-1.5 border-t border-forest-700 pt-3 text-xs leading-snug">
+          <p className="text-forest-100">No restaurant set up yet.</p>
+          <Link
+            href="/setup"
+            className="rounded-lg bg-ivory px-3 py-2 text-center text-sm font-semibold text-forest-900 transition-colors hover:bg-cream"
+          >
+            Set up your restaurant
+          </Link>
+        </div>
+      );
+    case "unavailable":
+      return (
+        <p className="border-t border-forest-700 pt-3 text-xs leading-snug text-forest-100">
+          Restaurant status is unavailable right now. Try again shortly.
+        </p>
       );
   }
 }

@@ -643,3 +643,159 @@ The project owner performed the live setup and browser checks below and reported
 **Documentation updated in this checkpoint:** the README (status, "What exists today" table, Neon status note, Database setup step 5, ownership note, an "Authentication setup" verification note, and limitations) and AGENTS.md (current stage and authentication state; the Next.js-managed block is unchanged).
 - No code, dependency, schema, or migration changes.
 - `npm run lint`, `npm run build`, and `npm test` weren't rerun for this documentation-only update.
+
+---
+
+## 007: Restaurant setup and ownership (implemented, unverified live)
+
+**Date:** 2026-11-06
+**Agent:** Claude Code (Claude Opus 5.5)
+**Branch:** `codex/restaurant-setup`, from commit `8b31a47`. Nothing staged or committed by the agent.
+
+### Request
+
+Restaurant setup and authorization foundations, as the next prerequisite for delivering AI-processed inquiries (later, through Zapier) to the right restaurant:
+- A minimal membership linking `User` and `Restaurant`, with one restaurant per user enforced by the database.
+- A setup page where an authenticated user names their restaurant and becomes its owner, created atomically and safe against repeats and races.
+- A server-only helper that resolves the session user's restaurant through membership, failing closed.
+- Discoverable UI in the existing shell.
+- An additive migration prepared offline, offline tests, and docs.
+
+**Out of scope:** inquiry CRUD, AI, Zapier, Gmail, quotes, menus, deployment, invitations, staff roles, switching, billing, and new dependencies. The agent was not to connect to Neon, apply migrations, or touch `.env.local`.
+
+### Research
+
+Bundled Next.js docs:
+- `02-guides/forms.md`: server-side validation, and `useActionState` with a `prevState` argument.
+- `02-guides/server-actions.md`:
+  - `refresh()` re-renders the current route in the action's response and still returns a value.
+  - A `redirect()` throws.
+  - Every action gets a framework Origin check.
+- `03-api-reference/04-functions/redirect.md`.
+- The authentication-with-Cache-Components guide (read in entry 006): request-time reads go behind `<Suspense>`, and nothing goes in `"use cache"`.
+
+I validated by hand instead of using Zod, which is present only as a Better Auth dependency and wasn't added.
+
+### Changes
+
+- **`prisma/schema.prisma`:**
+  - New `enum RestaurantRole { OWNER }`.
+  - New `model RestaurantMembership`:
+    - `id` UUIDv7, with `userId @unique @db.Uuid` (one restaurant per user, enforced by the database).
+    - `restaurantId @db.Uuid` (indexed), and `role` defaulting to `OWNER`.
+    - `createdAt`/`updatedAt` as `Timestamptz(3)`.
+    - Both foreign keys use `onDelete: Restrict`, so a restaurant can't silently lose its owner and a restaurant with members can't be deleted.
+  - Relation fields added: `Restaurant.memberships` and `User.membership`.
+  - Existing columns are unchanged. The five `Restaurant` lines in the diff are whitespace realignment for the new relation field.
+- **`prisma/migrations/20261106155051_add_restaurant_membership/migration.sql`:**
+  - Generated offline with `prisma migrate diff --from-schema <HEAD schema from git> --to-schema prisma/schema.prisma --script`.
+  - Contents: `CREATE TYPE`, `CREATE TABLE`, a unique index on `userId`, an index on `restaurantId`, and two `RESTRICT` foreign keys.
+  - No `DROP` and no change to existing tables. Both earlier migrations are untouched.
+- **`src/lib/restaurants.ts`** (server-only, no Next.js request APIs, so it's testable):
+  - `validateRestaurantName`: NFC, trimmed, whitespace collapsed, 1–100 characters (code points), no control characters.
+  - `findRestaurantForUser(db, userId)`: a membership lookup by `userId` only.
+  - `resolveRestaurantAccess(getDb, user)`: `unauthenticated`, `needs-setup`, or `member`. There's no database call for signed-out visitors, and database errors propagate.
+  - `createRestaurantForUser(db, user, rawName)`:
+    - Validates, and returns an existing restaurant as `exists`.
+    - Otherwise runs one interactive `$transaction` (`maxWait` 5s, `timeout` 10s) that creates the restaurant, then the `OWNER` membership.
+    - On P2002 (unique violation) it re-reads and returns the winning restaurant as `exists`. Other errors propagate.
+  - `submitRestaurantSetup({ getUser, getDb }, formData)`:
+    - Reads only `name`.
+    - Returns `unauthenticated`, `invalid`, `created`, `exists`, or a generic `error`.
+    - Logs only the error name and code (`describeErrorSafely`).
+- **`src/lib/restaurant-access.ts`** (server-only):
+  - `getRestaurantAccess()`: React `cache()` per request, with the user from `getSessionUser()`.
+  - `requireRestaurant()`: redirects to `/sign-in` or `/setup`, or returns `{ user, restaurant }` for later scoped queries.
+- **`src/lib/restaurant-actions.ts`:** `createRestaurantAction(prevState, formData)` runs `submitRestaurantSetup` with the real session and Prisma. On `created` or `exists` it calls `refresh()`, so the page and the account panel re-render.
+- **`src/lib/account-state.ts`:**
+  - Signed-in state now carries `restaurant: member | needs-setup | unavailable`, resolved with the already-verified user.
+  - A failed membership lookup becomes `unavailable` (fail closed).
+  - Error logging uses `describeErrorSafely`, replacing its local copy.
+- **`src/app/setup/page.tsx`:**
+  - A static header and a "What setup does today" list.
+  - A Suspense panel for each state: sign-in not set up, unavailable, signed out (link to sign in), restaurant status unavailable (no form), or the form or existing restaurant.
+- **`src/components/restaurant/restaurant-setup-form.tsx`** (client):
+  - A labelled controlled input (`maxLength`, `required`, `aria-describedby`, `aria-invalid`), errors in a `role="alert"` region, and a pending "Saving…" state with the button disabled.
+  - When the server re-renders with a restaurant, the same component instance keeps its action state. It shows a `role="status"` success or "already has a restaurant" message, and moves focus to the "Your restaurant" heading.
+  - It receives only the restaurant name, never the ID.
+- **`src/components/auth/account-panel.tsx`:** in the signed-in state, a restaurant summary:
+  - Members see the name.
+  - Users without a restaurant see "No restaurant set up yet" and **Set up your restaurant**.
+  - If the lookup failed, it says "unavailable".
+
+  The note now reads "Your account and restaurant are real. The inquiries shown are fictional samples." Drawer links already close the drawer through the existing link delegation.
+- **Wording:**
+  - `demo-mode.tsx` banner: the sign-in and restaurant name are real records; no real inquiries are stored.
+  - `sign-in/page.tsx`: the header, scope list, and signed-in text now say signing in lets you set up a restaurant and that inquiry data is fictional.
+- **`tests/restaurants.test.ts`** (new, 20 tests, mocked database): see Verification.
+- **Docs:**
+  - README: status, table, Neon note, Database setup step 5, the data model, the ownership note, the auth "Grants" bullet, a new "Restaurant setup" section (behavior, authorization, and private verification steps), project structure, and limitations.
+  - AGENTS.md: current stage, the new "Restaurant state", database rules (restaurant access only through membership, inquiry access still prohibited, no `"use cache"`), client components, and when to run `npm test`. The Next.js-managed block is unchanged, apart from git's line-ending normalization.
+- **Unchanged:** dependencies, `src/lib/navigation.ts` (Settings and Inquiries stay "planned"), the dashboard, and the planned modules.
+
+### Verification (actual results)
+
+- **Prisma:** `npx prisma validate` reports the schema valid. `npx prisma generate` produced Prisma Client 7.10.1 with the `RestaurantMembership` model.
+- **Migration contents:** reviewed. Only the additive statements listed above. No `DROP` and no `ALTER` of existing tables. `git status` shows both existing migrations unmodified.
+- **`npm test`: 44 passed, 0 failed** (24 existing, 20 new). The two Better Auth error log lines come from the existing database-guard control tests.
+  - New tests, with a **mocked** database:
+    - **Name validation (4):** trimming, whitespace, NFC, the boundary at 100 characters (code points), and control characters.
+    - **Access resolution (4):**
+      - Signed out, without any database use.
+      - No membership gives `needs-setup`.
+      - A member resolves only by the session `userId`.
+      - A database error throws (fail closed).
+    - **Creation (6):**
+      - The transaction creates the restaurant, then the `OWNER` membership with the session user, with bounded waits.
+      - An invalid name means no database work.
+      - An existing member gets `exists` with no transaction.
+      - A P2002 race returns the winner, and nothing is committed (simulated rollback).
+      - Other errors propagate with nothing committed.
+      - A P2002 with no winner isn't hidden.
+    - **Form submission (5):**
+      - Signed out means no database use.
+      - Spoofed `userId`, `ownerId`, `restaurantId`, `role`, and `user.id` fields are ignored: the membership uses the session user, and no spoofed value reaches any query.
+      - `exists` and `invalid` states.
+      - Database and session errors give a generic message, and logs contain only the type and code, never the raw message.
+    - **No caching (1):** no source file uses `"use cache"`.
+  - **Mutation checks:** making `resolveRestaurantAccess` call `getDb()` for signed-out visitors, and disabling the P2002 handling, each failed exactly the intended test. The file was restored from a backup and compared byte for byte.
+- **`npm run lint`:** passed, exit 0, no warnings.
+- **`npm run build` with every auth and database variable blanked:** succeeded, exit 0. `/setup` is `◐` Partial Prerender like the other pages, and `/api/auth/[...all]` is `ƒ`. No database connection or credential is needed.
+- **`next start` with credentials blanked:** 32 of 32 scripted checks passed. That's the 27 earlier checks plus 5 for `/setup`:
+  - `/setup` returns 200 and explains sign-in isn't set up.
+  - It renders no form and no `name` input.
+  - It shows no "Set up your restaurant" link.
+  - It labels inquiry data as fictional.
+
+  The server log had no errors or connection strings.
+- **Client bundle scan (`.next/static`):** no `restaurantMembership`, `findUnique`, `submitRestaurantSetup`, `describeErrorSafely`, Prisma, `DATABASE_URL`, or Google secret.
+- **Not done:** no database connection, no migration applied, no records written, and `.env.local` never opened.
+
+### What is and isn't verified
+
+- **Verified offline (mocked):**
+  - Validation, identity and scope source, the query shapes, the result and error handling, and fail-closed behavior.
+  - The rejection of client-supplied IDs.
+  - That no caching directives are used.
+  - That builds need no credentials, and the missing-configuration UI.
+- **Not verified (needs the user's migration and browser test):**
+  - Real setup writes.
+  - PostgreSQL's transaction rollback.
+  - The unique constraint under real concurrency.
+  - Prisma's Neon adapter running the interactive transaction.
+  - The `refresh()` re-render, the success message, and the focus move in a browser.
+  - The restaurant display in the panel on desktop and mobile.
+  - A second account's isolation from the first restaurant's name.
+- **Not built:** inquiry operations, so no inquiry route has been tested for restaurant isolation. Also no invitations, staff roles, switching, renaming, or production or Railway testing.
+
+### Open issues
+
+- **Name length:** the restaurant name limit (100) is enforced in application code only. The existing `Restaurant.name` column stays `TEXT`, because changing it isn't additive.
+- **Deletion:** users and restaurants with memberships can't be deleted (`RESTRICT`). There's no deletion feature yet; decide the policy when one is added.
+- **First visit:** new users land on the dashboard after sign-in and find setup through the account panel. A first-sign-in redirect to `/setup` could come later.
+- **Still outstanding from earlier entries:**
+  - `NavLinks` `<Suspense>`.
+  - Duplicated stage definitions.
+  - The dev-only audit advisories.
+  - npm 11's held-back install scripts.
+  - Production and Railway authentication.

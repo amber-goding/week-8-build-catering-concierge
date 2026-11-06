@@ -3,10 +3,13 @@ import "server-only";
 import { connection } from "next/server";
 import { cache } from "react";
 import { getAuthSetupStatus } from "@/lib/auth-config";
+import { getPrisma } from "@/lib/db";
+import { describeErrorSafely, resolveRestaurantAccess, type MemberRestaurant } from "@/lib/restaurants";
 import { getSessionUser, type SessionUser } from "@/lib/session";
 
 /**
- * What the shell and the sign-in page show about the visitor's account.
+ * What the shell, the sign-in page, and the setup page show about the
+ * visitor's account and restaurant.
  *
  * React's cache() shares one result between components within a single
  * request (the sidebar and the mobile drawer both render it). Nothing is kept
@@ -15,7 +18,13 @@ import { getSessionUser, type SessionUser } from "@/lib/session";
 export type AccountState =
   | { kind: "setup-required"; problems: string[] }
   | { kind: "signed-out" }
-  | { kind: "signed-in"; user: SessionUser }
+  | { kind: "signed-in"; user: SessionUser; restaurant: RestaurantState }
+  | { kind: "unavailable" };
+
+/** A signed-in user's restaurant: theirs, none yet, or unknown because the lookup failed. */
+export type RestaurantState =
+  | { kind: "member"; restaurant: MemberRestaurant }
+  | { kind: "needs-setup" }
   | { kind: "unavailable" };
 
 export const getAccountState = cache(async (): Promise<AccountState> => {
@@ -25,22 +34,26 @@ export const getAccountState = cache(async (): Promise<AccountState> => {
   const setup = getAuthSetupStatus();
   if (!setup.configured) return { kind: "setup-required", problems: setup.problems };
 
+  let user: SessionUser | null;
   try {
-    const user = await getSessionUser();
-    return user ? { kind: "signed-in", user } : { kind: "signed-out" };
+    user = await getSessionUser();
   } catch (error) {
     // Fail closed (treated as not signed in) and log only the error type and code.
-    // Raw messages can include connection details.
-    console.error(`[auth] Could not check the session: ${describeError(error)}`);
+    console.error(`[auth] Could not check the session: ${describeErrorSafely(error)}`);
     return { kind: "unavailable" };
   }
+  if (!user) return { kind: "signed-out" };
+
+  return { kind: "signed-in", user, restaurant: await getRestaurantState(user) };
 });
 
-function describeError(error: unknown): string {
-  if (!error || typeof error !== "object") return "unknown error";
-  const { name, code } = error as { name?: unknown; code?: unknown };
-  const parts: string[] = [];
-  if (typeof name === "string" && /^[A-Za-z0-9_]{1,64}$/.test(name)) parts.push(name);
-  if (typeof code === "string" && /^[A-Za-z0-9_]{1,40}$/.test(code)) parts.push(`code ${code}`);
-  return parts.length > 0 ? parts.join(", ") : "unknown error";
+async function getRestaurantState(user: SessionUser): Promise<RestaurantState> {
+  try {
+    const access = await resolveRestaurantAccess(getPrisma, user);
+    return access.status === "member" ? { kind: "member", restaurant: access.restaurant } : { kind: "needs-setup" };
+  } catch (error) {
+    // Fail closed: no restaurant is shown and setup isn't offered while membership is unknown.
+    console.error(`[restaurant] Could not check the membership: ${describeErrorSafely(error)}`);
+    return { kind: "unavailable" };
+  }
 }

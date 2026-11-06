@@ -2,12 +2,13 @@
 
 Catering Concierge is a catering management product for independent restaurants. The goal is to capture catering inquiries from a connected inbox, web forms, and manual entry, then help staff move each one from first contact to a confirmed event.
 
-> **Status: foundation, database schema on Neon development, and Google sign-in verified locally against Neon development.** The UI is a responsive dashboard shell running on **fictional demonstration data**.
+> **Status: foundation, database schema on Neon development, Google sign-in verified locally against Neon development, and restaurant setup (implemented, unverified live).** The UI is a responsive dashboard shell running on **fictional demonstration data**.
 >
 > - The initial migration has been applied to the Neon development branch, and the Prisma CLI's direct connection is verified.
 > - The app's **pooled** connection through `getPrisma()` is verified with read-only `COUNT` queries on both tables (`npm run db:check`, 2026-11-06).
 > - **Google sign-in, sessions, and sign-out work locally against Neon development** (reported by the project owner, 2026-11-06). The auth migration is applied there, and the project owner's manual browser checks passed. See [Authentication setup](#authentication-setup). Production and Railway authentication are untested.
-> - **No page reads or writes restaurant or inquiry records.** Restaurant membership and tenant authorization aren't implemented, and signing in unlocks nothing.
+> - **Restaurant setup and ownership are implemented but unverified live.** A signed-in user can create one restaurant at `/setup` and becomes its owner. The membership migration (`20261106155051_add_restaurant_membership`) is prepared but **not applied**, so setup hasn't run against a real database. See [Restaurant setup](#restaurant-setup).
+> - **No page reads or writes inquiry records.** Restaurant-scoped inquiry operations, and tenant isolation for them, aren't built.
 > - No email account or AI service is connected.
 
 ## What exists today
@@ -19,9 +20,10 @@ Catering Concierge is a catering management product for independent restaurants.
 | Inquiry pipeline preview | Demo only. Read-only fictional inquiries |
 | Demonstration-mode indicator | Shown on every page |
 | Google sign-in, sessions, and sign-out (Better Auth) | Working locally against Neon development (manual checks by the project owner). Production and Railway are untested. Without configuration, the shell says "Sign-in not set up" and the sign-in button is disabled |
-| Sign-in page (`/sign-in`) and account panel (sidebar and mobile drawer) | Working. Show setup status, the signed-in name and email, and sign-out |
+| Sign-in page (`/sign-in`) and account panel (sidebar and mobile drawer) | Working. Show setup status, the signed-in name and email, and sign-out. The panel also shows the member's restaurant name, or a link to set one up (restaurant part unverified live) |
+| Restaurant setup (`/setup`) and owner membership | Implemented, **unverified live**. Needs the membership migration and a browser test. Offline tests cover the logic with a mocked database |
 | Inquiries, Email, Menu, Quotes, Events, Settings | Routes exist and show planned scope. **No functionality** |
-| Database layer (Prisma 7 + Neon) | `Restaurant` and `Inquiry` migrated to Neon development. The CLI's direct connection and the app's pooled connection (`getPrisma()`, read-only counts) are verified. The auth-tables migration is also applied there, and sign-in uses those tables. No page reads or writes restaurant or inquiry records, and their write persistence is untested |
+| Database layer (Prisma 7 + Neon) | `Restaurant` and `Inquiry` migrated to Neon development. The CLI's direct connection and the app's pooled connection (`getPrisma()`, read-only counts) are verified. The auth-tables migration is also applied there, and sign-in uses those tables. The membership migration (`20261106155051_add_restaurant_membership`) is prepared but **not applied**. Only restaurant setup writes `Restaurant` rows. No page reads or writes inquiry records, and restaurant and inquiry write persistence is untested |
 
 The sample records live in [`src/lib/demo-data.ts`](src/lib/demo-data.ts). They use the "Example" surname and contain no pricing or revenue figures.
 
@@ -89,6 +91,7 @@ These steps connect the code to a Neon database. They're written for PowerShell,
 > - The app's **pooled** connection (`DATABASE_URL`) through `getPrisma()` was later verified with `npm run db:check` (read-only counts, both tables returned 0 rows).
 > - No other environment (production, Railway) has been set up.
 > - The second migration, `20261106140237_add_better_auth`, was later applied to the same development branch, and `npx prisma migrate status` again reported the schema up to date.
+> - The third migration, `20261106155051_add_restaurant_membership`, **hasn't been applied**. Step 5 applies it.
 >
 > Repeat the steps below for any new environment.
 
@@ -112,7 +115,12 @@ These steps connect the code to a Neon database. They're written for PowerShell,
    npx prisma migrate status
    ```
 
-5. Apply the committed migrations. This **changes the database**: it runs every pending migration in `prisma/migrations/`: `20261106081912_init` (restaurant and inquiry tables) and `20261106140237_add_better_auth` (the `User`, `Session`, `Account`, and `Verification` tables). Both are already applied on Neon development:
+5. Apply the committed migrations. This **changes the database**: it runs every pending migration in `prisma/migrations/`:
+   - `20261106081912_init`: the restaurant and inquiry tables.
+   - `20261106140237_add_better_auth`: the `User`, `Session`, `Account`, and `Verification` tables.
+   - `20261106155051_add_restaurant_membership`: the `RestaurantRole` enum and the `RestaurantMembership` table.
+
+   The first two are already applied on Neon development, so only the third is pending there:
 
    ```powershell
    npx prisma migrate deploy
@@ -151,7 +159,7 @@ npx prisma generate    # regenerate the client after schema changes
 
 ### Data model
 
-- **Restaurant**: `id` (UUIDv7), `name`, timestamps.
+- **Restaurant**: `id` (UUIDv7), `name`, timestamps. Its members are linked through `RestaurantMembership`. Restaurant setup trims names and limits them to 100 characters in application code; the database column isn't length-limited.
 - **Inquiry**:
   - `id`, a required `restaurantId`, timestamps.
   - `source`: `MANUAL`, `EMAIL`, or `WEB_FORM`.
@@ -165,9 +173,22 @@ npx prisma generate    # regenerate the client after schema changes
   - **Session**: unique `token`, `expiresAt`, optional `ipAddress` and `userAgent`, `userId` (indexed).
   - **Account**: `providerId` (`google`), `accountId` (Google's subject ID), `userId` (indexed), optional token fields, and `scope`. Better Auth encrypts `accessToken` and `refreshToken`. `idToken` stays `NULL`, because the app clears it before every write. `password` exists in the core schema but stays unused, because email/password sign-in is off.
   - **Verification**: `identifier` (indexed), `value`, `expiresAt`. Holds short-lived OAuth sign-in state.
-  - Deleting a user deletes their sessions and accounts (`ON DELETE CASCADE`). **No auth model relates to `Restaurant` or `Inquiry`.**
+  - Deleting a user deletes their sessions and accounts (`ON DELETE CASCADE`). A user reaches a restaurant only through `RestaurantMembership`.
+- **RestaurantMembership** (not applied to any database yet):
+  - `id` (UUIDv7), `userId`, `restaurantId`, `role`, timestamps.
+  - `role` is the `RestaurantRole` enum, which has one value, `OWNER`.
+  - `userId` is **unique**: each user belongs to at most one restaurant, enforced by the database.
+  - Indexed on `restaurantId`.
+  - Deleting a user or a restaurant that still has a membership is **blocked** (`ON DELETE RESTRICT`).
+  - Keyed by user ID, never by email address.
 
-> **Ownership isn't authorization.** `restaurantId` records which restaurant owns an inquiry. It doesn't control who can see or change it. Before any database-backed page, route, or action is exposed, the app needs authentication, authenticated restaurant selection, and restaurant-scoped queries. **Authentication now works locally (Neon development). Restaurant selection and restaurant-scoped queries don't exist, and tenant isolation isn't implemented.** The only database-backed routes are Better Auth's own `/api/auth/*` endpoints and server-side session reads, an exception the project owner approved.
+> **Ownership isn't authorization.** `restaurantId` records which restaurant owns an inquiry. It doesn't control who can see or change it. Before any database-backed page, route, or action is exposed, the app needs authentication, authenticated restaurant selection, and restaurant-scoped queries. **Authentication works locally (Neon development).**
+>
+> - **Implemented, unverified live:** restaurant scope. `getRestaurantAccess()` / `requireRestaurant()` in [`src/lib/restaurant-access.ts`](src/lib/restaurant-access.ts) resolve the signed-in user's restaurant through their membership.
+> - **Not built:** restaurant-scoped inquiry queries, so inquiry tenant isolation isn't implemented or tested.
+> - **Database-backed routes today:**
+>   - Better Auth's `/api/auth/*` endpoints and server-side session reads, an exception the project owner approved.
+>   - The restaurant setup page and its Server Action, which read and write only the signed-in user's own membership and restaurant.
 
 ## Authentication setup
 
@@ -184,7 +205,7 @@ Sign-in is **Google only**, through [Better Auth](https://www.better-auth.com).
 **What signing in does:**
 - Requests only Google's identity scopes: `openid`, `email`, and `profile`. No Gmail access, and no offline access (Google issues no refresh token).
 - Creates a database session in a signed, httpOnly cookie. It lasts 7 days from sign-in and isn't extended by page views.
-- **Grants nothing.** Every demonstration page stays viewable without signing in, and signing in unlocks no restaurant or inquiry data.
+- **Grants no inquiry data.** Every demonstration page stays viewable without signing in. Signing in lets you set up one restaurant (see [Restaurant setup](#restaurant-setup)). It doesn't unlock any inquiry records, because none are real yet.
 
 **How it's built:**
 - The Better Auth handler is [`src/app/api/auth/[...all]/route.ts`](src/app/api/auth/%5B...all%5D/route.ts). The auth instance is created on the first request, so builds need no credentials.
@@ -250,33 +271,90 @@ Do these yourself. Don't paste any of the values into chats, issues, or commits.
 
 For local development on Neon development, the project owner reports steps 1–4 complete and the step 5 checks listed in the verification note above passed. The optional items and the focus-return detail weren't reported. Any other environment remains unverified until it passes these steps.
 
+## Restaurant setup
+
+A signed-in user names their restaurant at `/setup` and becomes its owner. Each account can belong to **one** restaurant. There are no invitations, staff roles, restaurant switching, or renaming yet.
+
+**Status: implemented, unverified live.**
+- The membership migration (`20261106155051_add_restaurant_membership`) is prepared offline and **not applied**.
+- Setup writes, the transaction, and the database constraints haven't run against a real database.
+- Offline tests (`npm test`) cover the logic with a **mocked** database only.
+
+**How it works:**
+- **Finding it:** after sign-in, the account panel (sidebar and mobile drawer) shows **Set up your restaurant** until setup is done, then the restaurant's name. The name is shown only to its member.
+- **Validation:** the setup form sends only a name. The server trims it, collapses whitespace, normalizes it to Unicode NFC, and accepts 1–100 characters with no control characters.
+- **Identity:** the owner is always the verified session user (`getSessionUser()`). Any user ID, owner ID, restaurant ID, or role sent by the browser is ignored.
+- **Atomic creation:** the restaurant and its `OWNER` membership are created in one interactive transaction. If the membership insert fails, the restaurant rolls back.
+- **Repeated or concurrent submissions:**
+  - The form disables its button while saving.
+  - The server returns an existing restaurant instead of creating another.
+  - The database's unique index on `RestaurantMembership.userId` makes a racing second request fail and roll back. The page then shows the existing restaurant ("already has a restaurant").
+- **Errors** show a generic message and log only the error type and code, never raw database text.
+
+**Authorization behavior** (`src/lib/restaurant-access.ts`, server-only):
+- **The three states:** `getRestaurantAccess()` returns `unauthenticated` (signed out, or sign-in not configured), `needs-setup` (signed in, no membership), or `member` (with the restaurant).
+- **Where the restaurant comes from:** only the session user's membership. It never reads a restaurant ID from a form, URL, header, or browser state, and there's no endpoint that looks up a restaurant by ID.
+- **Failures:** database errors are thrown, never treated as access. The setup page and the account panel then show "unavailable" and offer neither the form nor a restaurant.
+- **Caching:** results are shared only within one request (React `cache()`). Nothing is cached across requests or users, and no source file uses `"use cache"` (a test checks this).
+- **For later inquiry work:** `requireRestaurant()` redirects to `/sign-in` or `/setup`, or returns the user and `restaurant.id` to scope queries.
+
+### Private steps to verify restaurant setup (project owner)
+
+1. **Apply the membership migration** to Neon development. This **changes the database**:
+
+   ```powershell
+   npx prisma migrate status
+   npx prisma migrate deploy
+   npx prisma migrate status
+   ```
+
+   `deploy` should apply only `20261106155051_add_restaurant_membership`. The final `status` should report the schema up to date.
+2. **Test in a real browser** at `http://localhost:3000`, with `npm run dev`, or `npm run build` then `npm run start`:
+   - **First visit:** sign in. The account panel should show "No restaurant set up yet" and **Set up your restaurant**, on desktop and in the mobile drawer. Following the link from the drawer should close the drawer.
+   - **Validation:** on `/setup`, submit an empty name. You should get an error, and nothing is created.
+   - **Save:** submit a name with extra spaces, such as `  Bistro   Example `. You should see "Restaurant saved. You're its owner.", with focus on **Your restaurant** and the trimmed name. The account panel should show the name.
+   - **Persistence:** reload `/setup`. It should show your restaurant and no form.
+   - **Repeat:** open `/setup` in a second tab *before* saving, save in the first tab, then submit in the second. It should say the account already has a restaurant.
+   - **Double submit:** double-click **Save restaurant** on a fresh account if you can. Only one restaurant should result.
+   - **Sign-out:** sign out. `/setup` should ask you to sign in, and no restaurant name should be visible.
+   - **Second account (optional):** sign in with a second Google test account. It should need setup and never see the first account's restaurant name.
+   - **Database check (optional):** in Neon's table view there should be one `RestaurantMembership` row per account that completed setup (role `OWNER`), and no `Restaurant` row without a membership.
+
+Until these steps pass, treat setup writes, the transaction, the unique constraint, and restaurant display as unverified. A true simultaneous race may not be reproducible by hand. The database's unique index is the guarantee, and it's only proven once applied.
+
 ## Project structure
 
 ```
 prisma/
-  schema.prisma        Restaurant and Inquiry models, plus enums
-  migrations/          Version-controlled SQL migrations (init applied to Neon development only)
+  schema.prisma        Restaurant, Inquiry, auth, and RestaurantMembership models, plus enums
+  migrations/          Version-controlled SQL migrations (init and auth applied to Neon development; membership pending)
 prisma7.config.ts      Prisma CLI config: schema path, migrations path, DIRECT_URL, env loading
 scripts/
   db-check.ts          Manual, read-only pooled-connection check (`npm run db:check`)
 tests/
   auth.test.ts         Offline auth tests (`npm test`)
+  restaurants.test.ts  Offline restaurant setup and scope tests (mocked database)
 src/
   app/                 Routes (App Router). page.tsx is the dashboard.
     <module>/page.tsx  Placeholder pages for planned modules
     sign-in/page.tsx   Google sign-in, setup status, and sign-out
+    setup/page.tsx     Restaurant setup (one restaurant per account)
     api/auth/[...all]/ Better Auth endpoints (Google sign-in and callback, session, sign-out)
   components/          App shell, navigation, and shared UI primitives
     auth/              Account panel, Google sign-in button, sign-out button
+    restaurant/        Restaurant setup form
   generated/prisma/    Generated Prisma Client (git-ignored; created by `prisma generate`)
   lib/
-    db.ts              Server-only, lazily created Prisma client with bounded timeouts (used by Better Auth and scripts/db-check.ts)
+    db.ts              Server-only, lazily created Prisma client with bounded timeouts (used by Better Auth, restaurant setup, and scripts/db-check.ts)
     auth.ts            Server-only Better Auth setup (lazy), session verification, /api/auth handler
     auth-config.ts     Server-only checks of the auth environment variables
     auth-actions.ts    Sign-out Server Action
     auth-client.ts     Browser client used only to start Google sign-in
     session.ts         getSessionUser() / requireSessionUser(): trusted identity for server code
-    account-state.ts   Per-request account status for the shell and sign-in page
+    account-state.ts   Per-request account and restaurant status for the shell, sign-in, and setup pages
+    restaurants.ts     Server-only restaurant name validation, membership lookup, and setup transaction
+    restaurant-access.ts getRestaurantAccess() / requireRestaurant(): restaurant scope from the session
+    restaurant-actions.ts Restaurant setup Server Action
     navigation.ts      Nav items and each module's status (preview / planned)
     demo-data.ts       Fictional sample inquiries (remove when real data exists)
 ```
@@ -286,16 +364,18 @@ src/
 - Authentication is verified only locally, against Neon development (manual checks by the project owner).
   - Production and Railway authentication are untested.
   - Working sign-in doesn't establish write persistence for restaurant or inquiry data, which is untested.
-- No restaurant data in the app.
-  - The initial migration is applied to the Neon development branch.
+- Restaurant setup is implemented but **unverified live**.
+  - The membership migration (`20261106155051_add_restaurant_membership`) isn't applied, so setup writes, the transaction's rollback, and the one-restaurant-per-user unique constraint haven't run against a real database. Offline tests use a mocked database.
+  - One restaurant per account, owner role only. No invitations, staff roles, switching, renaming, or deletion.
+- No real inquiry data.
+  - No page reads or writes inquiry records, and the dashboard still shows fictional demonstration data to every visitor, signed in or not.
   - The CLI's direct connection and the app's pooled connection are verified, but only with read-only counts (`npm run db:check`).
-  - No page reads or writes restaurant or inquiry records, and the dashboard still shows fictional demonstration data to every visitor, signed in or not.
-- No authorization, restaurant membership, or tenant isolation. The required restaurant relation only records ownership, and a signed-in user has no relation to any restaurant.
+- Restaurant scope exists (`requireRestaurant()`), but nothing uses it for inquiries yet. Inquiry tenant isolation isn't implemented or tested.
 - Sessions last 7 days from sign-in and aren't extended by activity. Server-side reads deliberately don't refresh them.
 - No email, web form, or AI integration. Source labels in the pipeline are illustrative.
 - Inquiries cannot be opened, created, edited, or moved between stages.
 - Light theme only.
-- Automated tests cover only the auth wiring, offline (`npm test`). Verification is otherwise lint plus a production build.
+- Automated tests (`npm test`) cover the auth wiring and restaurant setup and scope, offline. Restaurant tests use a mocked database. Verification is otherwise lint plus a production build.
 - `npm audit` reports moderate advisories in the ESLint/TypeScript-ESLint dev toolchain. They don't affect the runtime bundle.
 - npm 11 holds back the install scripts of `prisma`, `@prisma/engines`, and `esbuild` (used by `tsx`) until you approve them (`npm approve-scripts`). Locally on Windows, the Prisma CLI and `tsx` work without them. Whether a Linux build environment such as Railway needs them hasn't been checked.
 

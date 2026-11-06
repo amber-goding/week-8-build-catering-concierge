@@ -39,11 +39,12 @@ enum InquiryStage {
 }
 
 model Restaurant {
-  id        String    @id @default(uuid(7)) @db.Uuid
-  name      String
-  createdAt DateTime  @default(now()) @db.Timestamptz(3)
-  updatedAt DateTime  @updatedAt @db.Timestamptz(3)
-  inquiries Inquiry[]
+  id          String                 @id @default(uuid(7)) @db.Uuid
+  name        String
+  createdAt   DateTime               @default(now()) @db.Timestamptz(3)
+  updatedAt   DateTime               @updatedAt @db.Timestamptz(3)
+  inquiries   Inquiry[]
+  memberships RestaurantMembership[]
 }
 
 model Inquiry {
@@ -95,6 +96,8 @@ model User {
   updatedAt     DateTime  @default(now()) @updatedAt @db.Timestamptz(3)
   sessions      Session[]
   accounts      Account[]
+  /// The user's restaurant, if they've completed setup. At most one (see RestaurantMembership).
+  membership    RestaurantMembership?
 }
 
 /// A signed-in browser session. The cookie carries a signed copy of `token`.
@@ -147,4 +150,39 @@ model Verification {
   updatedAt  DateTime @default(now()) @updatedAt @db.Timestamptz(3)
 
   @@index([identifier])
+}
+
+// ---------------------------------------------------------------------------
+// Restaurant membership
+//
+// Links a signed-in User to the Restaurant they belong to. This is the only
+// source of a user's restaurant scope: server code resolves it from the
+// verified session (src/lib/restaurant-access.ts), never from a restaurant ID
+// sent by the browser. Membership is keyed by user ID, not email address.
+// ---------------------------------------------------------------------------
+
+/// A member's role in their restaurant. Only OWNER exists today: creating a
+/// restaurant makes its creator the owner. There are no staff roles or invitations yet.
+enum RestaurantRole {
+  OWNER
+}
+
+/// One user's membership in one restaurant.
+model RestaurantMembership {
+  id           String         @id @default(uuid(7)) @db.Uuid
+  /// Unique: each user belongs to at most one restaurant. The database enforces
+  /// this, so concurrent setup requests can't create a second membership.
+  userId       String         @unique @db.Uuid
+  /// Deleting a user who still has a membership is blocked (Restrict), so a
+  /// restaurant can't silently lose its owner.
+  user         User           @relation(fields: [userId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  restaurantId String         @db.Uuid
+  /// Deleting a restaurant that still has members is blocked (Restrict), like inquiries.
+  restaurant   Restaurant     @relation(fields: [restaurantId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  role         RestaurantRole @default(OWNER)
+  createdAt    DateTime       @default(now()) @db.Timestamptz(3)
+  updatedAt    DateTime       @updatedAt @db.Timestamptz(3)
+
+  // Lists a restaurant's members and backs the Restrict check when a restaurant is deleted.
+  @@index([restaurantId])
 }

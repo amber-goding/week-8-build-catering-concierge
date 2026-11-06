@@ -14,7 +14,7 @@ export default function SignInPage({ searchParams }: PageProps<"/sign-in">) {
       <PageHeader
         eyebrow="Account"
         title="Sign in"
-        description="Sign in with your Google account. Signing in confirms who you are. It doesn't unlock any restaurant data yet."
+        description="Sign in with your Google account. Signing in confirms who you are, and lets you set up your restaurant. Inquiry data is still fictional."
         badge={<Badge tone="forest">Google only</Badge>}
       />
 
@@ -49,7 +49,7 @@ const scope = [
   "Confirms your identity with Google. Only your name, email address, and profile are requested.",
   "Keeps you signed in on this browser for up to 7 days, or until you sign out.",
   "Doesn't connect Gmail or read your email.",
-  "Doesn't give access to restaurant or inquiry data. The dashboard stays fictional sample data, and every page stays viewable without signing in.",
+  "Lets you set up one restaurant, which you then own. Inquiry data isn't real yet: the dashboard stays fictional sample data, and every page stays viewable without signing in.",
 ];
 
 async function SignInPanel({ searchParams }: { searchParams: PageProps<"/sign-in">["searchParams"] }) {
@@ -64,8 +64,8 @@ async function SignInPanel({ searchParams }: { searchParams: PageProps<"/sign-in
           <h2 className="font-display text-xl font-medium text-forest-900">You&apos;re signed in</h2>
           <p className="mt-2 text-sm text-muted">
             Signed in with Google as <strong className="font-semibold text-ink">{state.user.name}</strong> (
-            <span className="break-all">{state.user.email}</span>). This is your real account. The restaurant data in
-            this app is still fictional.
+            <span className="break-all">{state.user.email}</span>). This is your real account. The inquiry data in this
+            app is still fictional.
           </p>
         </div>
         <div className="flex flex-wrap items-start gap-3">

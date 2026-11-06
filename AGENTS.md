@@ -18,15 +18,17 @@ Catering Concierge is a catering management SaaS product for independent restaur
 
 ## Current stage
 
-**Foundation, database schema on Neon development, and Google sign-in verified locally against Neon development.** The UI is a responsive dashboard shell on fictional demonstration data.
+**Foundation, database schema on Neon development, Google sign-in verified locally against Neon development, and restaurant setup (implemented, unverified live).** The UI is a responsive dashboard shell on fictional demonstration data.
 
 **Database state:**
-- **Code:** the Prisma 7 schema (`Restaurant`, `Inquiry`, plus the auth models `User`, `Session`, `Account`, `Verification`), two SQL migrations, and a server-only client in `src/lib/db.ts`.
+- **Code:** the Prisma 7 schema (`Restaurant`, `Inquiry`, the auth models `User`, `Session`, `Account`, `Verification`, and `RestaurantMembership`), three SQL migrations, and a server-only client in `src/lib/db.ts`.
 - **Applied (reported by the project owner):** the user applied migration `20261106081912_init` to the Neon **development** branch. `prisma migrate status` reports the schema is up to date, which verifies the CLI's direct connection (`DIRECT_URL`).
 - **Verified by `npm run db:check` (2026-11-06):** the app's pooled connection (`DATABASE_URL`) through `getPrisma()`, with read-only `COUNT` queries on `Restaurant` and `Inquiry`.
 - **Applied (reported by the project owner):** migration `20261106140237_add_better_auth` (auth tables only) on Neon development. `prisma migrate status` reports the schema up to date.
-- **Not tested or not implemented:** restaurant or inquiry write persistence, record creation and editing, restaurant membership, and tenant authorization. Working sign-in exercises only the auth tables.
-- No page, route, or action reads or writes `Restaurant` or `Inquiry` records. The dashboard still shows fictional demonstration data.
+- **Prepared offline, not applied:** migration `20261106155051_add_restaurant_membership` (the `RestaurantRole` enum and the `RestaurantMembership` table). The user applies it.
+- **Not tested live:** restaurant setup writes, its transaction rollback, and the unique constraint on `RestaurantMembership.userId`.
+- **Not implemented:** inquiry write persistence, inquiry creation and editing, and inquiry tenant isolation.
+- Only the restaurant setup page and its Server Action read or write `Restaurant` and `RestaurantMembership`, for the session user's own records. No page, route, or action reads or writes `Inquiry` records. The dashboard still shows fictional demonstration data.
 - The migration and connection checks cover Neon development only. No production application has been deployed.
 
 **Authentication state:** Google-only sign-in with Better Auth (`src/lib/auth.ts`, `/api/auth/[...all]`, `/sign-in`).
@@ -35,7 +37,12 @@ Catering Concierge is a catering management SaaS product for independent restaur
 - **Not verified live:** stored-token contents and the disabled token endpoints (offline tests only), focus and screen-reader behavior, and any production or Railway environment.
 - Without configuration, the UI shows "Sign-in not set up", the sign-in button is disabled, and `/api/auth/*` answers 503.
 
-There is no authorization, restaurant membership, Gmail integration, or AI API usage. See `PROMPT-HISTORY.md` for what each task delivered.
+**Restaurant state:** one restaurant per user, created at `/setup` with the creator as `OWNER`.
+- Restaurant scope comes from `src/lib/restaurant-access.ts`.
+- Implemented and covered by offline tests that use a mocked database (`tests/restaurants.test.ts`).
+- **Unverified live** until the user applies the membership migration and runs the browser checks in the README's "Restaurant setup" section.
+
+There are no inquiry operations, staff roles, invitations, Gmail integration, or AI API usage. See `PROMPT-HISTORY.md` for what each task delivered.
 
 ## Stack
 
@@ -49,11 +56,15 @@ There is no authorization, restaurant membership, Gmail integration, or AI API u
 
 - Use `getPrisma()` from `src/lib/db.ts` only in server code. It imports `server-only`, so never import it from client components.
 - `DATABASE_URL` (pooled) is for the app runtime. `DIRECT_URL` (direct) is for the Prisma CLI.
-- `getPrisma()` runs in two places today:
+- `getPrisma()` runs in three places today:
   - Better Auth (`src/lib/auth.ts`), which reads and writes only the auth tables.
+  - Restaurant setup and scope (`src/lib/restaurants.ts`, called from `restaurant-access.ts`, `restaurant-actions.ts`, and `account-state.ts`). It reads and writes only the session user's own `RestaurantMembership` and `Restaurant`.
   - `npm run db:check` (`scripts/db-check.ts`). It's manual, read-only, and runs under `--conditions=react-server`, so `server-only` stays real. Keep it out of install, lint, and build. Run it only when the user authorizes a database connection.
 - **Ownership is not authorization.** `Inquiry.restaurantId` records ownership only. Before exposing any database-backed page, route, or action, authenticated restaurant selection and restaurant-scoped queries must exist. Don't claim tenant isolation until they do.
-  - **Narrow exception (approved by the user):** the Better Auth endpoints (`/api/auth/*`) and server-side session reads may use the database before restaurant membership exists. Nothing else may. `Restaurant` and `Inquiry` access stays prohibited.
+  - **Narrow exception (approved by the user):** the Better Auth endpoints (`/api/auth/*`) and server-side session reads may use the database without a restaurant membership.
+  - **Restaurant access:** only through the session user's membership, via `getRestaurantAccess()` / `requireRestaurant()` (`src/lib/restaurant-access.ts`) or the setup flow in `src/lib/restaurants.ts`. Never accept a restaurant ID, user ID, owner ID, or role from a form, URL, header, or browser state. Never add an endpoint that looks up a restaurant by an arbitrary ID.
+  - **Inquiry access stays prohibited** until inquiry queries are scoped with `requireRestaurant()`'s `restaurant.id` and tested. Don't claim inquiry tenant isolation before then.
+  - **No caching across requests:** don't put membership or restaurant reads in `"use cache"` scopes (`tests/restaurants.test.ts` fails if any source file uses `"use cache"`).
 - Auth models follow Better Auth's core schema. When upgrading `better-auth`, run `npm test`: it checks offline that `prisma/schema.prisma` still matches the library. Don't run `npx auth generate` against this schema, because it rewrites the file.
 - Agents must not apply migrations, run `db push` or `migrate reset`, seed, or connect to a database unless the user explicitly asks. Create new migrations with the user, or offline with `prisma migrate diff`. Never fabricate migration history.
 
@@ -79,7 +90,7 @@ There is no authorization, restaurant membership, Gmail integration, or AI API u
 
 ## Conventions
 
-- Server Components by default. Add `"use client"` only for interactivity or browser APIs (currently `nav-links.tsx`, `mobile-nav.tsx`, and the sign-in and sign-out buttons in `src/components/auth/`).
+- Server Components by default. Add `"use client"` only for interactivity or browser APIs (currently `nav-links.tsx`, `mobile-nav.tsx`, the sign-in and sign-out buttons in `src/components/auth/`, and `src/components/restaurant/restaurant-setup-form.tsx`).
 - Use the `@/*` import alias for `src/*`.
 - Use the theme tokens (`forest-*`, `brass-*`, `ivory`, `cream`, `linen`, `sand`, `ink`, `muted`; `font-display` for headings; `shadow-card` / `shadow-card-raised` for card shadows). Avoid ad-hoc hex or rgba values in components.
 - Icons are inline SVGs in `src/components/icons.tsx`. Don't add an icon library for a few glyphs.
@@ -95,7 +106,7 @@ npm run lint
 npm run build
 ```
 
-When a change touches authentication, the schema, or `src/lib/auth*.ts`, also run `npm test` (offline; no database or credentials).
+When a change touches authentication, restaurant setup or scope, the schema, `src/lib/auth*.ts`, or `src/lib/restaurant*.ts`, also run `npm test` (offline; no database or credentials).
 
 Report failures honestly. Don't claim a check passed without running it.
 
