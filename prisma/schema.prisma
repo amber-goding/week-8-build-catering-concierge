@@ -1,0 +1,69 @@
+// Catering Concierge database schema (Prisma ORM 7, PostgreSQL on Neon).
+//
+// Connection URLs are not set here: Prisma 7 reads the CLI connection from
+// prisma7.config.ts, and the app passes its pooled URL to the Neon driver
+// adapter in src/lib/db.ts.
+//
+// OWNERSHIP IS NOT AUTHORIZATION. Inquiry.restaurantId records which restaurant
+// owns a row. Nothing in this schema restricts who can read or change it.
+// Authenticated restaurant selection and restaurant-scoped queries must exist
+// before any database-backed route or action is exposed.
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+/// Where an inquiry came from.
+enum InquirySource {
+  MANUAL
+  EMAIL
+  WEB_FORM
+}
+
+/// Pipeline stage. Mirrors the stages in the dashboard preview (src/lib/demo-data.ts).
+enum InquiryStage {
+  NEW
+  NEEDS_DETAILS
+  QUOTING
+  AWAITING_CLIENT
+  CONFIRMED
+}
+
+model Restaurant {
+  id        String    @id @default(uuid(7)) @db.Uuid
+  name      String
+  createdAt DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime  @updatedAt @db.Timestamptz(3)
+  inquiries Inquiry[]
+}
+
+model Inquiry {
+  id           String        @id @default(uuid(7)) @db.Uuid
+  /// Owning restaurant. Required. Deleting a restaurant that still has inquiries is blocked (Restrict).
+  restaurantId String        @db.Uuid
+  restaurant   Restaurant    @relation(fields: [restaurantId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  source       InquirySource
+  stage        InquiryStage  @default(NEW)
+
+  // Details may be incomplete when an inquiry first arrives, so all are optional.
+  eventName    String?
+  contactName  String?
+  contactEmail String?
+  /// Calendar date of the event, without time or time zone.
+  eventDate    DateTime?     @db.Date
+  guestCount   Int?
+  notes        String?
+
+  createdAt    DateTime      @default(now()) @db.Timestamptz(3)
+  updatedAt    DateTime      @updatedAt @db.Timestamptz(3)
+
+  // Restaurant-scoped access paths: pipeline by stage, newest first, and upcoming events.
+  @@index([restaurantId, stage, createdAt])
+  @@index([restaurantId, createdAt])
+  @@index([restaurantId, eventDate])
+}

@@ -18,13 +18,30 @@ Catering Concierge is a catering management SaaS product for independent restaur
 
 ## Current stage
 
-**Foundation only.** The app is a responsive dashboard shell on fictional demonstration data. There is no database, authentication, Gmail integration, or AI API usage. See `PROMPT-HISTORY.md` for what each task delivered.
+**Foundation plus database schema applied to Neon development.** The UI is a responsive dashboard shell on fictional demonstration data.
+
+**Database state:**
+- **Code:** the Prisma 7 schema (`Restaurant`, `Inquiry`), an initial SQL migration, and a server-only client in `src/lib/db.ts`.
+- **Applied (reported by the project owner):** the user applied migration `20261106081912_init` to the Neon **development** branch. `prisma migrate status` reports the schema is up to date, which verifies the CLI's direct connection (`DIRECT_URL`).
+- **Untested:** the app's pooled connection (`DATABASE_URL`) and `getPrisma()`.
+- No page, route, or action reads or writes database records. The dashboard still shows fictional demonstration data.
+- No other environment (production, Railway) has a database.
+
+There is no authentication, authorization, Gmail integration, or AI API usage. See `PROMPT-HISTORY.md` for what each task delivered.
 
 ## Stack
 
 - Next.js 16 App Router with Turbopack, `cacheComponents` and `partialPrefetching` enabled
 - React 19, TypeScript (strict), Tailwind CSS v4 (CSS-first `@theme` tokens in `src/app/globals.css`)
-- Later stages: Neon PostgreSQL + Prisma, OpenAI API, Gmail API (OAuth), Railway deployment
+- Prisma ORM 7.10 (`prisma-client` generator, output to the git-ignored `src/generated/prisma`) with `@prisma/adapter-neon` for Neon PostgreSQL. CLI config lives in `prisma7.config.ts`. Keep `prisma`, `@prisma/client`, and `@prisma/adapter-neon` on the same 7.x version. npm's `prisma@latest` currently points to an 8.x release candidate.
+- Later stages: OpenAI API, Gmail API (OAuth), Railway deployment
+
+## Database rules
+
+- Use `getPrisma()` from `src/lib/db.ts` only in server code. It imports `server-only`, so never import it from client components.
+- `DATABASE_URL` (pooled) is for the app runtime. `DIRECT_URL` (direct) is for the Prisma CLI.
+- **Ownership is not authorization.** `Inquiry.restaurantId` records ownership only. Before exposing any database-backed page, route, or action, authenticated restaurant selection and restaurant-scoped queries must exist. Don't claim tenant isolation until they do.
+- Agents must not apply migrations, run `db push` or `migrate reset`, seed, or connect to a database unless the user explicitly asks. Create new migrations with the user, or offline with `prisma migrate diff`. Never fabricate migration history.
 
 ## Non-negotiable requirements
 
