@@ -966,3 +966,94 @@ The smallest secure connection from the existing Zap (Zapier Tables "New Record"
   - `NavLinks` `<Suspense>`.
   - Duplicated stage definitions.
   - The dev-only audit advisories.
+
+---
+
+## 009: Post-demo checkpoint: Railway demonstration and live Zapier import (documentation only)
+
+**Date:** 2026-11-06
+**Agent:** Claude Code (Claude Opus 5.5)
+**Branch:** `codex/verified-demo-checkpoint`, based on commit `a3e7f0b`. Nothing staged or committed by the agent.
+
+### Request
+
+Update README.md, AGENTS.md, and this file to the verified post-demo checkpoint, keeping setup reported by the project owner separate from browser checks performed by Codex. Document the published five-step Zap, keep the limitations explicit, and correct conflicting current-status statements. Documentation only: no application code, dependency, configuration, schema, or migration changes, and the Next.js-managed block in AGENTS.md stays as it is.
+
+### Reported by the project owner
+
+- All four migrations are applied to the Neon **development** branch, including `20261106165710_add_zapier_inquiry_import`. The project owner pasted local PowerShell output showing `npm run db:deploy` applying that migration, followed by `prisma migrate status` reporting the schema up to date.
+- `main` was pushed to GitHub at commit `a3e7f0b`.
+- The app was deployed on Railway, using the Neon development database.
+- Google sign-in was configured for the Railway domain.
+- The updated Zap was published.
+
+### Observed by Codex in the browser
+
+- The deployed health endpoint returned `{"status":"ok"}`.
+- The signed-in Inquiries page displayed "Catering Concierge Demo".
+- A Zapier action test returned 201 `created`.
+- Repeating that delivery returned 200 `duplicate` with the same inquiry ID.
+- The fictional Avery, Morgan, and Kendra inquiries appeared in the deployed app with their AI reviews.
+- Kendra's inquiry appeared after a later delay. The cause hasn't been confirmed.
+
+Claude didn't perform, observe, or independently confirm any of the checks above, and connected to no service for this entry.
+
+### The published Zap (five steps)
+
+1. Zapier Tables — New Record.
+2. AI by Zapier — Analyze and Return Data.
+3. Zapier Tables — Update Record, writing the AI review only.
+4. Code by Zapier — Run Javascript, using `JSON.stringify` to package `recordId`, `inquiryMessage`, and `aiReview`.
+5. API by Zapier — an authenticated POST to `/api/integrations/zapier/inquiries`.
+
+The bearer token is stored in the API by Zapier authentication connection as a static `Authorization` header, which Zapier adds to each request. It isn't entered in the action's ordinary fields. Token rotation must update that connection and the application environment (`ZAPIER_IMPORT_TOKEN`) together.
+
+This replaces the earlier plan in entry 008 (three existing steps plus an API step building the JSON from key/value fields).
+
+### Limitations that remain
+
+- This is a deployed demonstration on Neon development, not a production-ready restaurant service. Local development and the deployment share the same data.
+- Imports use one configured restaurant and table, and are always marked as fictional demonstration data.
+- Inquiry viewing works. Manual entry, editing, quotes, sending, bookings, and Gmail integration aren't built.
+- Isolation between two restaurant accounts hasn't been tested live. Neither have concurrent deliveries of the same record (offline tests only).
+- The dashboard pipeline remains separate, fictional sample data.
+- The app itself makes no AI calls. AI processing happens in Zapier.
+- On Railway, only a signed-in session was observed. The local sign-in checks, the cookie's `Secure` flag, and healthcheck timing weren't verified there. Because the import migration was applied locally, Railway's `npm run db:deploy` pre-deploy execution is also unverified.
+- Restaurant setup checks beyond the first save are still unreported.
+
+### Documentation updated
+
+- **README.md:**
+  - The status block (now a checkpoint with reported and observed lists) and the "What exists today" rows for sign-in, the account panel, Inquiries, the import endpoint, health, and the database layer.
+  - The tech stack, the `npm test` description, the Neon status note, Database setup step 5, and the data model's import fields (now applied).
+  - The ownership note and the authentication verification notes (Railway).
+  - The Zapier section: status, a new "The published Zap" subsection, and setup and maintenance steps replacing the old connection steps.
+  - The Railway section's status and its "Not verified" list.
+  - Project structure (migrations; `navigation.ts` statuses) and "Current limitations".
+- **AGENTS.md:** current stage, a post-demo checkpoint paragraph, and the database, authentication, integration, and deployment state. Also the Railway stack line, and the isolation rule (now requires a second-account test). The Next.js-managed block is unchanged.
+- **PROMPT-HISTORY.md:** this entry. Earlier entries are unchanged, including entry 008's "unverified live" heading, which is historical.
+
+### Corrections (same task, at the project owner's request)
+
+- **Branch:** this entry first listed `main`. The working branch is `codex/verified-demo-checkpoint`, based on `a3e7f0b`.
+- **Migration method:** the project owner supplied local PowerShell output showing `npm run db:deploy` applying `20261106165710_add_zapier_inquiry_import`, followed by `prisma migrate status` reporting the schema up to date. Statements that local versus Railway application was unknown were removed from README.md, AGENTS.md, and this entry. Railway's pre-deploy execution remains separately unverified.
+- **Sample-data rule:** AGENTS.md requirement 2 now says dashboard fixtures live in `src/lib/demo-data.ts`, and that the approved Zapier pilot stores fictional inquiries in the database with `isDemo: true` and visible demonstration labels. The other fictional-data requirements are unchanged. The README's sample-data paragraph and project-structure line now match.
+- **Zapier token:** README.md, AGENTS.md, and this entry now explain that the bearer token is stored in the API by Zapier authentication connection as a static `Authorization` header, injected into requests rather than entered in ordinary action fields, and that rotation must update that connection and the application environment together.
+
+### Verification
+
+- Documentation-only. `npm run lint`, `npm run build`, and `npm test` weren't rerun for this update.
+- Earlier in the same session, a read-only demo-readiness review of commit `a3e7f0b` ran `npm test` (94 passed, 0 failed), `npm run lint` (passed), and `npm run build` (passed). No code has changed since.
+- No `.env` file was opened. No service was contacted, no migration was run, and nothing was committed, pushed, or deployed.
+
+### Open issues
+
+- **Code comments and labels not updated in this documentation-only task:**
+  - `src/lib/session.ts` still has a comment saying a session must not be used to read restaurant or inquiry data.
+  - The sidebar's demo pill (`src/components/demo-mode.tsx`) says "Sample data only", although the sign-in and restaurant name are real.
+- **Kendra's delayed appearance** has no confirmed cause.
+- **Still outstanding from earlier entries:**
+  - Restaurant setup checks beyond the first save.
+  - `NavLinks` `<Suspense>`.
+  - Duplicated stage definitions.
+  - The dev-only audit advisories.
