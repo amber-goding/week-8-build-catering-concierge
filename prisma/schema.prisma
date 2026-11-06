@@ -64,6 +64,21 @@ model Inquiry {
   guestCount   Int?
   notes        String?
 
+  // Imported inquiries (Zapier pilot). Stored verbatim as untrusted text; no
+  // details are extracted from them. The source of an import is MANUAL: Zapier
+  // is only the transport.
+  /// The inquiry text as originally received.
+  inquiryMessage String?
+  /// AI-generated review from Zapier. Untrusted plain text that requires human
+  /// review. Show it only with that label, and never parse it into fields.
+  aiReview       String?
+  /// The Zapier Tables table and record this inquiry was imported from. Used only
+  /// to prevent duplicate imports.
+  zapierTableId  String?
+  zapierRecordId String?
+  /// True for fictional demonstration data. Set by the server, never from a request.
+  isDemo         Boolean @default(false)
+
   createdAt    DateTime      @default(now()) @db.Timestamptz(3)
   updatedAt    DateTime      @updatedAt @db.Timestamptz(3)
 
@@ -71,6 +86,10 @@ model Inquiry {
   @@index([restaurantId, stage, createdAt])
   @@index([restaurantId, createdAt])
   @@index([restaurantId, eventDate])
+  // One inquiry per imported Zapier record, per restaurant. Retries and
+  // concurrent deliveries of the same record can't create a second row.
+  // Rows without Zapier IDs (NULLs) never conflict.
+  @@unique([restaurantId, zapierTableId, zapierRecordId])
 }
 
 // ---------------------------------------------------------------------------

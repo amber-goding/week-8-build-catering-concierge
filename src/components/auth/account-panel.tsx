@@ -50,7 +50,7 @@ async function AccountPanelContent() {
     case "signed-out":
       return (
         <div className="flex flex-col gap-2 text-xs leading-snug">
-          <p className="text-forest-100">Not signed in. Sample pages are viewable without an account.</p>
+          <p className="text-forest-100">Not signed in. The dashboard and planned pages are viewable without an account.</p>
           <Link
             href="/sign-in"
             className="rounded-lg bg-ivory px-3 py-2 text-center text-sm font-semibold text-forest-900 transition-colors hover:bg-cream"

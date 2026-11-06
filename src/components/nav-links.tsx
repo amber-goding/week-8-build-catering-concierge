@@ -3,12 +3,13 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { Icon } from "@/components/icons";
-import { isActivePath, primaryNav, secondaryNav, type NavItem } from "@/lib/navigation";
+import { isActivePath, moduleStatusLabel, primaryNav, secondaryNav, type NavItem } from "@/lib/navigation";
 
 /**
  * Navigation list shared by the desktop sidebar and the mobile drawer.
  * Every link routes to a real page; modules that are not built yet are
- * marked "Planned" so the nav never implies functionality that doesn't exist.
+ * marked "Planned", and partly built ones "Limited", so the nav never implies
+ * functionality that doesn't exist.
  */
 export function NavLinks({ onNavigate }: { onNavigate?: () => void }) {
   const pathname = usePathname();
@@ -57,9 +58,9 @@ function NavGroup({
                 ].join(" ")}
               />
               <span className="flex-1">{item.label}</span>
-              {item.status === "planned" && (
+              {item.status !== "preview" && (
                 <span className="rounded-full border border-forest-600 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-forest-200">
-                  Planned
+                  {moduleStatusLabel[item.status]}
                 </span>
               )}
             </Link>

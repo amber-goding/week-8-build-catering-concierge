@@ -799,3 +799,170 @@ I validated by hand instead of using Zod, which is present only as a Better Auth
   - The dev-only audit advisories.
   - npm 11's held-back install scripts.
   - Production and Railway authentication.
+
+---
+
+## 008: Zapier pilot import, inquiry review screen, and Railway preparation (implemented, unverified live)
+
+**Date:** 2026-11-06
+**Agent:** Claude Code (Claude Opus 5.5)
+**Branch:** `codex/zapier-intake`, from commit `279d22a`. Nothing staged or committed by the agent.
+
+### Request and reported state
+
+The smallest secure connection from the existing Zap (Zapier Tables "New Record" → AI by Zapier → "Update Record", with fictional inquiries) to the app:
+- Import storage on `Inquiry`, with a database uniqueness constraint.
+- A bearer-token import endpoint with a fixed server-side restaurant and table.
+- A restaurant-scoped, read-only `/inquiries` review screen.
+- Railway readiness: Node 24, build and start, a pre-deploy migration, a health endpoint, and docs.
+
+**State reported by the project owner before this task:**
+- Google sign-in works locally.
+- The membership migration is applied.
+- A restaurant named "Catering Concierge Demo" was created and displayed.
+- The Zap works on its own, and Zapier isn't connected to the app.
+- Not every restaurant browser test was reported as passing.
+
+**Out of scope:** new AI integrations, Gmail, menus, quotes, general CRUD, new dependencies, service connections, migrations, Railway or Zapier configuration, and commits.
+
+### Research
+
+- **Bundled Next.js docs:**
+  - CLI: `next start` reads `PORT` (default 3000) and binds `0.0.0.0` by default.
+  - Route Handlers under Cache Components: a `GET` handler is prerendered unless it uses request data or `connection()`.
+  - `unstable_rethrow`, for letting `redirect()` pass through a try/catch.
+  - The server-actions guide (read in entry 007).
+- **Official Railway and Railpack docs** (fetched):
+  - **Config-as-code is deprecated:** `railway.json` and `railway.toml` stop being read on 2026-12-01, and new services can't opt in. So no `railway.json` was added; settings are documented for the dashboard instead.
+  - **Railpack** is the default builder. Its Node version priority is `RAILPACK_NODE_VERSION`, then `engines.node`, then `.nvmrc`. How it treats ranges isn't documented.
+  - **Pre-deploy commands** run between build and deploy, in a separate container with the service's variables. A failure stops the deploy.
+  - **`PORT`** is injected by Railway.
+  - **Healthchecks** run only during deploys and accept any 2xx response.
+  - **Railway's Next.js guide** suggests standalone output. I didn't use it: `next start` already respects `PORT`, and the task asked to avoid standalone changes without a concrete need.
+
+### Changes
+
+- **`prisma/schema.prisma` (`Inquiry`):**
+  - New fields: `inquiryMessage String?`, `aiReview String?`, `zapierTableId String?`, `zapierRecordId String?`, and `isDemo Boolean @default(false)`.
+  - New `@@unique([restaurantId, zapierTableId, zapierRecordId])`.
+  - The new lines sit in their own block, so existing lines show zero changes (`prisma format` wasn't run).
+- **`prisma/migrations/20261106165710_add_zapier_inquiry_import/migration.sql`:**
+  - Generated offline with `prisma migrate diff --from-schema <HEAD schema from git> --to-schema prisma/schema.prisma --script`.
+  - Contents: one `ALTER TABLE "Inquiry" ADD COLUMN …` (four nullable `TEXT` columns, plus `isDemo BOOLEAN NOT NULL DEFAULT false`) and one `CREATE UNIQUE INDEX`.
+  - No `DROP`, `ALTER COLUMN`, or change to other tables. The three earlier migrations are untouched.
+- **`src/lib/zapier-import.ts`** (server-only, no Next.js request APIs):
+  - **`readZapierConfig`:** requires `ZAPIER_IMPORT_TOKEN` (at least 32 characters, no whitespace), `ZAPIER_RESTAURANT_ID` (a UUID), `ZAPIER_TABLE_ID` (printable, at most 128 characters), and `DATABASE_URL`. Any `REPLACE_` placeholder is refused.
+  - **`handleZapierImport(request, { env, getDb })`, in order:**
+    1. Configuration (503 `import_unavailable`).
+    2. Bearer token, compared timing-safely as SHA-256 digests (401 with `WWW-Authenticate`). A bad token never reads the body or reaches the database.
+    3. `application/json` media type (415).
+    4. Body size (413): `Content-Length` is checked first, and a stream reader stops as soon as 128 KiB is passed.
+    5. Strict UTF-8 and JSON (400 `invalid_json`).
+    6. Exactly `recordId` (1–128 printable characters, no spaces), `inquiryMessage` (1–10,000), and `aiReview` (1–20,000). Text is trimmed and CRLF normalized, and control characters other than tab and line breaks are refused. Any other field is refused (400 `invalid_payload`, with problems that name fields, never values).
+    7. The configured restaurant must exist (otherwise 503, with a fixed log line that doesn't include the ID).
+    8. A duplicate lookup by the compound key returns 200 `duplicate`.
+    9. Otherwise `create` with the configured restaurant and table, `source: "MANUAL"`, and `isDemo: true`, returning 201 `created`.
+    10. On P2002 it re-reads the record and returns the winner as `duplicate`. Other errors return 500 `import_failed`, and the log carries only the error type and code.
+  - Every response sends `Cache-Control: no-store` and no CORS headers, and carries only `status` and `inquiryId`, or `error`.
+- **`src/app/api/integrations/zapier/inquiries/route.ts`:** `POST` only, wired to the real environment and `getPrisma`. Next.js answers 405 for `GET`, and `OPTIONS` gets 204 with no CORS allow headers.
+- **`src/lib/inquiries.ts`** (server-only):
+  - `listInquiriesForRestaurant(db, restaurantId)`: `where: { restaurantId }`, newest first, `take: 50`. It returns the message, review, `isDemo`, an `importedFromZapier` flag, and `receivedAt`. Zapier IDs aren't passed on.
+  - `formatReceivedAt`: en-US in UTC, with a "UTC" suffix.
+- **`src/app/inquiries/page.tsx`:** replaced the placeholder.
+  - The header says "Limited pilot" and describes the page as read-only.
+  - A Suspense list calls `requireRestaurant()` (redirecting to `/sign-in` or `/setup`), then `listInquiriesForRestaurant(getPrisma(), restaurant.id)`.
+  - `unstable_rethrow` lets redirects through, and any other failure shows an "unavailable" card (fail closed).
+  - It shows "For {restaurant name}", the count, **Refresh**, a truthful empty state, and the cards.
+- **`src/components/inquiries/inquiry-review-card.tsx`:** the received `<time>`, a "Demonstration data" badge, an "Imported via Zapier" badge, the original request, and the AI review in a separate panel labelled "AI-generated — requires human review". Text is escaped and rendered with `whitespace-pre-wrap break-words`. There are no action buttons.
+- **`src/components/inquiries/refresh-button.tsx`** (client): `router.refresh()` inside a transition, with a pending state and a polite live region.
+- **`src/app/api/health/route.ts`:** `GET` returns `{"status":"ok"}`, no-store. `connection()` keeps it request-time, and it makes no database or configuration access.
+- **Navigation and copy:**
+  - `ModuleStatus` gained `"limited"`, with labels from `moduleStatusLabel`.
+  - Inquiries is now "Limited" in the nav and the dashboard module list. Everything else is unchanged.
+  - The dashboard description points to the Inquiries page, and the sources panel gained a "Zapier pilot import · Pilot" row.
+  - The demo banner, sign-in scope list, and account panel now say pilot imports are stored, fictional, and labelled. They also say the dashboard and planned pages stay viewable without signing in, while `/inquiries` needs a restaurant.
+- **Railway readiness:**
+  - `engines.node` changed from `"^22.12 || >=24"` to `"24.x"`, and a new `.nvmrc` holds `24`.
+  - New script `"db:deploy": "prisma migrate deploy"`.
+  - `prisma` and `@next/env` moved from `devDependencies` to `dependencies`, because the pre-deploy migration needs the CLI and the env loader that `prisma7.config.ts` imports, even if dev dependencies are pruned.
+  - The lockfile was updated with `npm install --offline`: 130 `devOptional` flags were removed and the root entries moved. No version changed, and no package was added or removed.
+  - Build, start, and `postinstall` are otherwise unchanged. No Dockerfile, no standalone output, and no `railway.json`.
+- **`.env.example`:** `ZAPIER_IMPORT_TOKEN`, `ZAPIER_RESTAURANT_ID`, and `ZAPIER_TABLE_ID`, with `REPLACE_` placeholders and a private token-generation hint.
+- **`tests/zapier-import.test.ts`** (new, 50 tests, mocked database): see Verification.
+- **Docs:**
+  - **README:**
+    - Status, table, tech stack, Node 24 requirement, scripts, and environment variables.
+    - The Neon note (membership applied and the restaurant created, as reported), step 5, the data model, and the ownership note (browser reads require membership; machine imports have a fixed scope).
+    - Restaurant-setup status and the auth "Grants" bullet.
+    - New sections "Zapier pilot import" (endpoint contract, status table, review screen, and Zap steps) and "Deploying to Railway (demonstration)" (repository preparation, variables, settings, Google callback, and what's unverified).
+    - Project structure and limitations.
+  - **AGENTS.md:** current stage, database, restaurant, integration, and deployment state, the stack, the database rules (with the integration exception), a new "Integration and deployment rules" section, client components, and when to run `npm test`. The Next.js-managed block is unchanged.
+
+### Verification (actual results)
+
+- **Prisma:** `npx prisma validate` reports the schema valid, and `npx prisma generate` produced Prisma Client 7.10.1. The compound unique lookup across nullable columns type-checks.
+- **Migration contents:** reviewed. Additive only, as listed. `git status` shows the earlier migrations unmodified.
+- **`npm test`: 94 passed, 0 failed** (44 existing, 50 new). New tests:
+  - **Configuration (5):** each missing variable gives 503 with no database use. Placeholder, short-token, non-UUID, and spaced-table configurations are refused.
+  - **Authentication (8):**
+    - Missing, empty, `Basic`, wrong same-length, prefix, extended, and trailing-text tokens all get 401 with `WWW-Authenticate`, even with an invalid body and content type. `request.bodyUsed` stays false.
+    - A lower-case `bearer` scheme is accepted.
+  - **Content (5):**
+    - The JSON media type is required, and a charset parameter is accepted.
+    - An oversized `Content-Length` gives 413 without reading the body.
+    - An oversized streamed body with no `Content-Length` gives 413 after at most 4 chunks of 64 KiB.
+    - Malformed JSON and invalid UTF-8 give 400.
+  - **Payload (20):** 19 invalid shapes give 400 with no database work and no echoed values. These include client-supplied `restaurantId`, `isDemo`, `zapierTableId`, and `source`. Values exactly at the limits are accepted.
+  - **Scope (2):**
+    - The create data is exactly the configured restaurant and table, the record ID, `MANUAL`, `isDemo: true`, and the normalized texts.
+    - The response has only `status` and `inquiryId`, with no-store, no CORS headers, and no contents.
+    - A missing configured restaurant gives 503, creates nothing, and doesn't log the ID.
+  - **Duplicates (4):**
+    - A retry gives 200 with the same ID. Nothing is overwritten and there's a single create.
+    - Two concurrent deliveries, forced to interleave by a gate in the mock, give exactly one 201 and one 200 with the same ID, and a store size of 1.
+    - The same record ID from a different configured table makes a separate row.
+    - A P2002 with no visible winner gives 500.
+  - **Database failures (3):** a failed restaurant check, a failed insert, or a failed client creation each give 500 `import_failed`. Logs contain no password, connection string, token, contents, or "authorization".
+  - **Reads (3):**
+    - `where` is exactly `{ restaurantId }`, with `take` 50 and newest first, and no Zapier IDs are returned.
+    - A source check that `/inquiries` uses `requireRestaurant()` and `restaurant.id`, and reads no `searchParams`, `params`, `cookies()`, or `headers()`.
+    - Deterministic UTC timestamps.
+- **Mutation checks:** making the token comparison always pass, disabling the P2002 handling, and disabling the streamed size limit each failed exactly the intended tests (3, 1, and 1). The file was restored from a backup and compared byte for byte.
+- **`npm run lint`:** passed, exit 0, no warnings.
+- **`npm run build` with every auth, database, and Zapier variable blanked:** succeeded, exit 0.
+  - `/inquiries` is `◐`, and `/api/health` and `/api/integrations/zapier/inquiries` are `ƒ`.
+  - No database or credentials are needed.
+- **`next start` with credentials blanked and `PORT` from the environment** (no `-p`, as on Railway): 40 of 40 scripted checks passed.
+  - The earlier checks.
+  - `/api/health` returns exactly `{"status":"ok"}` with no-store.
+  - An import while unconfigured returns 503 `import_unavailable`, `GET` on the import route returns 405, and `OPTIONS` returns 204 with no CORS allow headers.
+  - Signed-out `/inquiries` returns 307 to `/sign-in` and shows no inquiry content.
+  - The nav shows Inquiries as "Limited", and the dashboard lists the Zapier pilot source.
+
+  The server log had no errors or connection strings.
+- **Client bundle scan:** no Zapier configuration names, import or read functions, `timingSafeEqual`, `zapierRecordId`, Prisma, or `DATABASE_URL`.
+- **Not done:** no database connection, migration, Railway or Zapier configuration, or deploy. `.env.local` was never opened, and no real credential was generated or shown.
+
+### What is and isn't verified
+
+- **Verified offline (mocked):** the endpoint's check order, authentication, limits, fixed scope, duplicate and race handling, sanitizing, and query shapes. Also the missing-configuration behavior, credential-free builds, `PORT` handling by `next start`, and the health endpoint.
+- **Not verified:**
+  - Applying the migration, and the unique index under real retries.
+  - A real Zap delivery, including the API by Zapier action's field names and JSON encoding.
+  - `/inquiries` against real data, and isolation with a second account.
+  - Railway's build, pre-deploy (including Prisma's Linux schema engine and npm 11's held-back install scripts), and healthcheck.
+  - HTTPS cookies and Google sign-in on the Railway domain.
+- **Not built:** extraction from inquiries or AI text, approve, send, edit, quote, or booking, multiple restaurants or tables, Gmail, and production infrastructure.
+
+### Open issues
+
+- **Token model:** a single shared token, rotated manually (in Railway variables and in the Zap header together). There's no per-restaurant credential model.
+- **List size:** the review list shows the latest 50, with no pagination.
+- **Duplicate content:** a duplicate delivery with *different* content is still reported as `duplicate` and doesn't update the stored record, by design. Changes in Zapier after the first import aren't reflected.
+- **Shared data:** the Railway demonstration would share the Neon development branch with local development.
+- **Types:** `@types/node` is still `^20` while the runtime is Node 24. It's type-only and was left unchanged to avoid dependency changes.
+- **Still outstanding:**
+  - Restaurant browser checks beyond the first save.
+  - `NavLinks` `<Suspense>`.
+  - Duplicated stage definitions.
+  - The dev-only audit advisories.

@@ -2,14 +2,15 @@
 
 Catering Concierge is a catering management product for independent restaurants. The goal is to capture catering inquiries from a connected inbox, web forms, and manual entry, then help staff move each one from first contact to a confirmed event.
 
-> **Status: foundation, database schema on Neon development, Google sign-in verified locally against Neon development, and restaurant setup (implemented, unverified live).** The UI is a responsive dashboard shell running on **fictional demonstration data**.
+> **Status: foundation, database schema on Neon development, Google sign-in verified locally against Neon development, restaurant setup, a Zapier pilot import with a read-only review screen (implemented, unverified live), and Railway deployment preparation (not deployed).** The dashboard runs on **fictional demonstration data**.
 >
 > - The initial migration has been applied to the Neon development branch, and the Prisma CLI's direct connection is verified.
 > - The app's **pooled** connection through `getPrisma()` is verified with read-only `COUNT` queries on both tables (`npm run db:check`, 2026-11-06).
 > - **Google sign-in, sessions, and sign-out work locally against Neon development** (reported by the project owner, 2026-11-06). The auth migration is applied there, and the project owner's manual browser checks passed. See [Authentication setup](#authentication-setup). Production and Railway authentication are untested.
-> - **Restaurant setup and ownership are implemented but unverified live.** A signed-in user can create one restaurant at `/setup` and becomes its owner. The membership migration (`20261106155051_add_restaurant_membership`) is prepared but **not applied**, so setup hasn't run against a real database. See [Restaurant setup](#restaurant-setup).
-> - **No page reads or writes inquiry records.** Restaurant-scoped inquiry operations, and tenant isolation for them, aren't built.
-> - No email account or AI service is connected.
+> - **Restaurant setup:** the project owner applied the membership migration to Neon development, then created a restaurant named "Catering Concierge Demo" and saw it displayed. The other restaurant browser checks haven't been reported. See [Restaurant setup](#restaurant-setup).
+> - **Zapier pilot import and `/inquiries` review screen: implemented, unverified live.** Their migration (`20261106165710_add_zapier_inquiry_import`) is prepared but **not applied**, Zapier isn't connected to the app yet, and no import has run against a real database. See [Zapier pilot import](#zapier-pilot-import).
+> - **Railway:** build, start, health, and migration steps are prepared and documented. Nothing has been deployed. See [Deploying to Railway](#deploying-to-railway-demonstration).
+> - No email account is connected, and the app itself calls no AI service. The AI review comes from the separate Zap.
 
 ## What exists today
 
@@ -21,9 +22,12 @@ Catering Concierge is a catering management product for independent restaurants.
 | Demonstration-mode indicator | Shown on every page |
 | Google sign-in, sessions, and sign-out (Better Auth) | Working locally against Neon development (manual checks by the project owner). Production and Railway are untested. Without configuration, the shell says "Sign-in not set up" and the sign-in button is disabled |
 | Sign-in page (`/sign-in`) and account panel (sidebar and mobile drawer) | Working. Show setup status, the signed-in name and email, and sign-out. The panel also shows the member's restaurant name, or a link to set one up (restaurant part unverified live) |
-| Restaurant setup (`/setup`) and owner membership | Implemented, **unverified live**. Needs the membership migration and a browser test. Offline tests cover the logic with a mocked database |
-| Inquiries, Email, Menu, Quotes, Events, Settings | Routes exist and show planned scope. **No functionality** |
-| Database layer (Prisma 7 + Neon) | `Restaurant` and `Inquiry` migrated to Neon development. The CLI's direct connection and the app's pooled connection (`getPrisma()`, read-only counts) are verified. The auth-tables migration is also applied there, and sign-in uses those tables. The membership migration (`20261106155051_add_restaurant_membership`) is prepared but **not applied**. Only restaurant setup writes `Restaurant` rows. No page reads or writes inquiry records, and restaurant and inquiry write persistence is untested |
+| Restaurant setup (`/setup`) and owner membership | Migration applied to Neon development, and one restaurant was created and displayed (reported by the project owner). Other checks not reported. Offline tests use a mocked database |
+| Inquiries (`/inquiries`) | **Limited, unverified live.** A read-only, restaurant-scoped list of inquiries imported through the Zapier pilot, showing the original request and the AI review. Needs its migration, the Zap step, and a browser test |
+| Zapier import endpoint (`POST /api/integrations/zapier/inquiries`) | Implemented, **unverified live**. A single-restaurant pilot with a bearer token and fixed server-side scope. Offline tests use a mocked database |
+| Health endpoint (`GET /api/health`) | Working. Reports process health only (no database or configuration) |
+| Email, Menu, Quotes, Events, Settings | Routes exist and show planned scope. **No functionality** |
+| Database layer (Prisma 7 + Neon) | `Restaurant` and `Inquiry` migrated to Neon development. The CLI's direct connection and the app's pooled connection (`getPrisma()`, read-only counts) are verified. The auth-tables migration is also applied there, and sign-in uses those tables. The membership migration is applied there too (reported by the project owner). The import migration (`20261106165710_add_zapier_inquiry_import`) is prepared but **not applied**. Only restaurant setup writes `Restaurant` rows, and only the Zapier import writes `Inquiry` rows. Inquiry write persistence is untested |
 
 The sample records live in [`src/lib/demo-data.ts`](src/lib/demo-data.ts). They use the "Example" surname and contain no pricing or revenue figures.
 
@@ -44,11 +48,11 @@ The sample records live in [`src/lib/demo-data.ts`](src/lib/demo-data.ts). They 
 - Database: [Prisma ORM](https://www.prisma.io) 7.10 with the Neon driver adapter, for Neon PostgreSQL. The schema is applied to the development branch. The app uses it only for sign-in and sessions.
 - Authentication: [Better Auth](https://www.better-auth.com) 1.7 (Google only), through its Prisma adapter
 
-Planned for later stages: the OpenAI API, the Gmail API with OAuth, and deployment on Railway.
+Deployment on Railway is prepared but not done. Planned for later stages: the Gmail API with OAuth. The app has no AI integration of its own: the pilot's AI review is produced inside Zapier.
 
 ## Getting started
 
-Requirements: Node.js 22.12+ or 24+ (developed on Node 24) and npm. Prisma 7 needs Node 20.19+, and Neon's driver needs the built-in WebSocket from Node 22 onward. The `engines` field in `package.json` records this.
+Requirements: **Node.js 24** and npm. `package.json` (`engines.node: "24.x"`), `.nvmrc`, and the Railway setup all use Node 24. Prisma 7 needs Node 20.19+, and Neon's driver needs the built-in WebSocket from Node 22 onward.
 
 ```bash
 npm install        # also runs `prisma generate` (postinstall)
@@ -62,6 +66,7 @@ npm run lint       # ESLint (next/core-web-vitals + TypeScript rules)
 npm run build      # prisma generate, then the production build (includes type checking)
 npm run start      # Serve the production build
 npm run db:check   # Manual, read-only database connectivity check (needs .env.local; see below)
+npm run db:deploy  # prisma migrate deploy: CHANGES the database (DIRECT_URL). Railway's pre-deploy command
 npm test           # Offline auth tests (Node's built-in runner; no database, network, or credentials)
 ```
 
@@ -75,6 +80,9 @@ The app runs and builds **without any environment variables**. Without them, sig
 | `BETTER_AUTH_URL` | Better Auth | The app's origin, such as `http://localhost:3000`. The only trusted origin, and the base of the Google redirect URI |
 | `GOOGLE_CLIENT_ID` | Better Auth's Google provider | From your Google Cloud OAuth client |
 | `GOOGLE_CLIENT_SECRET` | Better Auth's Google provider | From your Google Cloud OAuth client |
+| `ZAPIER_IMPORT_TOKEN` | Zapier pilot import ([`src/lib/zapier-import.ts`](src/lib/zapier-import.ts)) | Bearer token the Zap sends. At least 32 random characters |
+| `ZAPIER_RESTAURANT_ID` | Zapier pilot import | The one destination restaurant's ID (UUID) |
+| `ZAPIER_TABLE_ID` | Zapier pilot import | The one Zapier Tables table imports come from |
 
 All of these are server-only. None uses the `NEXT_PUBLIC_` prefix, and the browser only ever learns whether sign-in is configured.
 
@@ -91,7 +99,8 @@ These steps connect the code to a Neon database. They're written for PowerShell,
 > - The app's **pooled** connection (`DATABASE_URL`) through `getPrisma()` was later verified with `npm run db:check` (read-only counts, both tables returned 0 rows).
 > - No other environment (production, Railway) has been set up.
 > - The second migration, `20261106140237_add_better_auth`, was later applied to the same development branch, and `npx prisma migrate status` again reported the schema up to date.
-> - The third migration, `20261106155051_add_restaurant_membership`, **hasn't been applied**. Step 5 applies it.
+> - The third migration, `20261106155051_add_restaurant_membership`, was later applied as well. A restaurant named "Catering Concierge Demo" was created through `/setup` and displayed in the app.
+> - The fourth migration, `20261106165710_add_zapier_inquiry_import`, **hasn't been applied**. Step 5, or Railway's pre-deploy command, applies it.
 >
 > Repeat the steps below for any new environment.
 
@@ -119,8 +128,9 @@ These steps connect the code to a Neon database. They're written for PowerShell,
    - `20261106081912_init`: the restaurant and inquiry tables.
    - `20261106140237_add_better_auth`: the `User`, `Session`, `Account`, and `Verification` tables.
    - `20261106155051_add_restaurant_membership`: the `RestaurantRole` enum and the `RestaurantMembership` table.
+   - `20261106165710_add_zapier_inquiry_import`: the import columns on `Inquiry` and their unique index.
 
-   The first two are already applied on Neon development, so only the third is pending there:
+   The first three are already applied on Neon development, so only the fourth is pending there. `npm run db:deploy` runs the same command:
 
    ```powershell
    npx prisma migrate deploy
@@ -165,7 +175,15 @@ npx prisma generate    # regenerate the client after schema changes
   - `source`: `MANUAL`, `EMAIL`, or `WEB_FORM`.
   - `stage`: `NEW`, `NEEDS_DETAILS`, `QUOTING`, `AWAITING_CLIENT`, or `CONFIRMED`. Defaults to `NEW`, matching the demo pipeline.
   - Optional details: `eventName`, `contactName`, `contactEmail`, `eventDate` (PostgreSQL `DATE`), `guestCount`, `notes`.
+  - Import fields (migration `20261106165710_add_zapier_inquiry_import`, not applied yet):
+    - `inquiryMessage`: the original text.
+    - `aiReview`: untrusted AI text that needs human review.
+    - `zapierTableId` and `zapierRecordId`: for duplicate prevention.
+    - `isDemo`: defaults to `false`; the server sets it to `true` for every pilot import.
+
+    Imports store `source = MANUAL` (Zapier is only the transport). Nothing is extracted from the AI text into the detail fields.
   - Indexes on `(restaurantId, stage, createdAt)`, `(restaurantId, createdAt)`, and `(restaurantId, eventDate)`.
+  - **Unique** on `(restaurantId, zapierTableId, zapierRecordId)`, so each imported record exists once per restaurant. Rows without Zapier IDs never conflict.
   - Deleting a restaurant that still has inquiries is **blocked** (`ON DELETE RESTRICT`).
   - IDs are UUIDv7 values generated by Prisma Client, not database defaults. Rows inserted outside Prisma must supply their own `id`.
 - **Authentication** (Better Auth's core schema, with the same UUIDv7 IDs):
@@ -174,7 +192,7 @@ npx prisma generate    # regenerate the client after schema changes
   - **Account**: `providerId` (`google`), `accountId` (Google's subject ID), `userId` (indexed), optional token fields, and `scope`. Better Auth encrypts `accessToken` and `refreshToken`. `idToken` stays `NULL`, because the app clears it before every write. `password` exists in the core schema but stays unused, because email/password sign-in is off.
   - **Verification**: `identifier` (indexed), `value`, `expiresAt`. Holds short-lived OAuth sign-in state.
   - Deleting a user deletes their sessions and accounts (`ON DELETE CASCADE`). A user reaches a restaurant only through `RestaurantMembership`.
-- **RestaurantMembership** (not applied to any database yet):
+- **RestaurantMembership** (applied to Neon development, reported by the project owner):
   - `id` (UUIDv7), `userId`, `restaurantId`, `role`, timestamps.
   - `role` is the `RestaurantRole` enum, which has one value, `OWNER`.
   - `userId` is **unique**: each user belongs to at most one restaurant, enforced by the database.
@@ -184,11 +202,14 @@ npx prisma generate    # regenerate the client after schema changes
 
 > **Ownership isn't authorization.** `restaurantId` records which restaurant owns an inquiry. It doesn't control who can see or change it. Before any database-backed page, route, or action is exposed, the app needs authentication, authenticated restaurant selection, and restaurant-scoped queries. **Authentication works locally (Neon development).**
 >
-> - **Implemented, unverified live:** restaurant scope. `getRestaurantAccess()` / `requireRestaurant()` in [`src/lib/restaurant-access.ts`](src/lib/restaurant-access.ts) resolve the signed-in user's restaurant through their membership.
-> - **Not built:** restaurant-scoped inquiry queries, so inquiry tenant isolation isn't implemented or tested.
+> - **Restaurant scope:** `getRestaurantAccess()` / `requireRestaurant()` in [`src/lib/restaurant-access.ts`](src/lib/restaurant-access.ts) resolve the signed-in user's restaurant through their membership.
+> - **Browser reads require membership.** `/inquiries` filters every query by the restaurant ID from `requireRestaurant()`. Offline tests cover the query shape. Isolation hasn't been tested live.
+> - **Machine imports have a fixed server-side scope.** The Zapier endpoint authenticates with a bearer token and writes only to the restaurant and table in its server configuration. The request can't choose a restaurant. This is an approved exception for one pilot integration, not a general multi-tenant credential system.
 > - **Database-backed routes today:**
->   - Better Auth's `/api/auth/*` endpoints and server-side session reads, an exception the project owner approved.
->   - The restaurant setup page and its Server Action, which read and write only the signed-in user's own membership and restaurant.
+>   - Better Auth's `/api/auth/*` and server-side session reads.
+>   - Restaurant setup, for the user's own records.
+>   - `/inquiries`, for the member's restaurant.
+>   - The Zapier import, for the configured restaurant.
 
 ## Authentication setup
 
@@ -205,7 +226,7 @@ Sign-in is **Google only**, through [Better Auth](https://www.better-auth.com).
 **What signing in does:**
 - Requests only Google's identity scopes: `openid`, `email`, and `profile`. No Gmail access, and no offline access (Google issues no refresh token).
 - Creates a database session in a signed, httpOnly cookie. It lasts 7 days from sign-in and isn't extended by page views.
-- **Grants no inquiry data.** Every demonstration page stays viewable without signing in. Signing in lets you set up one restaurant (see [Restaurant setup](#restaurant-setup)). It doesn't unlock any inquiry records, because none are real yet.
+- **Grants access only to your own restaurant.** Signing in lets you set up one restaurant (see [Restaurant setup](#restaurant-setup)) and read its imported pilot inquiries at `/inquiries`, which are fictional demonstration records. The dashboard and the planned-module pages stay viewable without signing in.
 
 **How it's built:**
 - The Better Auth handler is [`src/app/api/auth/[...all]/route.ts`](src/app/api/auth/%5B...all%5D/route.ts). The auth instance is created on the first request, so builds need no credentials.
@@ -275,10 +296,11 @@ For local development on Neon development, the project owner reports steps 1–4
 
 A signed-in user names their restaurant at `/setup` and becomes its owner. Each account can belong to **one** restaurant. There are no invitations, staff roles, restaurant switching, or renaming yet.
 
-**Status: implemented, unverified live.**
-- The membership migration (`20261106155051_add_restaurant_membership`) is prepared offline and **not applied**.
-- Setup writes, the transaction, and the database constraints haven't run against a real database.
-- Offline tests (`npm test`) cover the logic with a **mocked** database only.
+**Status (reported by the project owner):**
+- The membership migration (`20261106155051_add_restaurant_membership`) is applied to Neon development.
+- A restaurant named "Catering Concierge Demo" was created and is displayed in the app.
+- The remaining browser checks below haven't been reported, so the repeat and concurrent submissions, validation messages, focus, and second-account behavior are still unverified live.
+- Offline tests (`npm test`) cover the logic with a **mocked** database.
 
 **How it works:**
 - **Finding it:** after sign-in, the account panel (sidebar and mobile drawer) shows **Set up your restaurant** until setup is done, then the restaurant's name. The name is shown only to its member.
@@ -320,32 +342,173 @@ A signed-in user names their restaurant at `/setup` and becomes its owner. Each 
    - **Second account (optional):** sign in with a second Google test account. It should need setup and never see the first account's restaurant name.
    - **Database check (optional):** in Neon's table view there should be one `RestaurantMembership` row per account that completed setup (role `OWNER`), and no `Restaurant` row without a membership.
 
-Until these steps pass, treat setup writes, the transaction, the unique constraint, and restaurant display as unverified. A true simultaneous race may not be reproducible by hand. The database's unique index is the guarantee, and it's only proven once applied.
+Step 1 and the first save are reported done. Until the rest pass, treat the repeat and concurrent paths, the transaction rollback, and the unique constraint as unverified live. A true simultaneous race may not be reproducible by hand. The database's unique index is the guarantee.
+
+## Zapier pilot import
+
+**Status: implemented, unverified live.**
+- Its migration (`20261106165710_add_zapier_inquiry_import`) is prepared offline and **not applied**.
+- Zapier isn't connected to the app yet, and no import has reached a real database.
+- Offline tests (`npm test`) use a **mocked** database.
+
+**What it is:** one existing, published Zap (Zapier Tables "New Record" → AI by Zapier → Tables "Update Record") holds **fictional** inquiries. A new final step will POST each record to the app, which stores it for **one** restaurant. The owner then reads it at `/inquiries`. The app never calls AI itself.
+
+### Endpoint: `POST /api/integrations/zapier/inquiries`
+
+**Request:**
+- `Authorization: Bearer <ZAPIER_IMPORT_TOKEN>`
+- `Content-Type: application/json`
+- A JSON body of at most 128 KiB, with **exactly** these three fields:
+
+  | Field | Rules |
+  | --- | --- |
+  | `recordId` | The Zapier Tables record ID. 1–128 printable characters, no spaces |
+  | `inquiryMessage` | The original inquiry text. 1–10,000 characters |
+  | `aiReview` | The AI review text. 1–20,000 characters |
+
+- Text is trimmed and line endings are normalized to `\n`. Control characters other than tabs and line breaks are refused.
+- Any other field is refused with 400, including `restaurantId`, `isDemo`, `zapierTableId`, and `source`.
+
+**Server-side behavior:**
+- The destination restaurant (`ZAPIER_RESTAURANT_ID`) and table (`ZAPIER_TABLE_ID`) come from server configuration.
+- Every import is stored with `isDemo = true` and `source = MANUAL`.
+
+**Order of checks:** configuration → token (timing-safe comparison of SHA-256 digests) → content type → size (enforced while reading) → payload → database. A bad token never reaches the body or the database.
+
+**Duplicates:** a retry or a concurrent second delivery of the same `recordId` returns the existing inquiry. It never creates another row and never overwrites the stored text. The unique index on `(restaurantId, zapierTableId, zapierRecordId)` settles races.
+
+| Situation | Status | Body |
+| --- | --- | --- |
+| Imported | 201 | `{"status":"created","inquiryId":"…"}` |
+| Already imported (retry or race) | 200 | `{"status":"duplicate","inquiryId":"…"}` |
+| Malformed JSON or invalid UTF-8 | 400 | `{"error":"invalid_json"}` |
+| Wrong or missing fields | 400 | `{"error":"invalid_payload","problems":[…]}` (field names only, never values) |
+| Missing or wrong token | 401 | `{"error":"unauthorized"}` |
+| Body over 128 KiB | 413 | `{"error":"payload_too_large"}` |
+| Not `application/json` | 415 | `{"error":"unsupported_media_type"}` |
+| Not configured, or the configured restaurant doesn't exist | 503 | `{"error":"import_unavailable"}` |
+| Database failure | 500 | `{"error":"import_failed"}` |
+
+**Responses and logs:**
+- Responses never contain record contents or credentials, and always send `Cache-Control: no-store`.
+- No CORS headers are sent: browsers on other origins can't call the endpoint.
+- Logs record only error types and codes, never headers, bodies, tokens, or raw database errors.
+
+### Review screen: `/inquiries`
+
+**Access:**
+- Signed-out visitors are redirected to `/sign-in`, and users without a restaurant to `/setup`.
+- Members see their own restaurant's inquiries, newest first (the latest 50). Every query is filtered by the restaurant ID from `requireRestaurant()`. Nothing in the URL or request can change it.
+
+**Each inquiry shows:**
+- The received time, in UTC.
+- A **Demonstration data** label.
+- The original request.
+- The AI review, labelled **AI-generated — requires human review**.
+
+Both texts render as plain text with their line breaks kept.
+
+**Controls:**
+- **Refresh** re-renders the list.
+- There are no approve, send, edit, quote, or booking controls.
+
+The dashboard stays a separate, fictional pipeline preview.
+
+### Private steps to connect the Zap (project owner)
+
+1. **Apply the import migration** to Neon development, either with `npx prisma migrate status` then `npx prisma migrate deploy` locally, or through Railway's pre-deploy command (below). It should apply only `20261106165710_add_zapier_inquiry_import`.
+2. **Find the two IDs:**
+   - `ZAPIER_RESTAURANT_ID`: the `id` of the "Catering Concierge Demo" row in the `Restaurant` table, for example in Neon's table view. Read it; don't edit anything.
+   - `ZAPIER_TABLE_ID`: the ID of the Zapier table the Zap watches, as shown in Zapier Tables (for example in the table's URL).
+3. **Generate the token privately:** `node -e "console.log(require('crypto').randomBytes(32).toString('base64url'))"`. Store it in `.env.local` or Railway variables, and in the Zap step. Nowhere else.
+4. **Set** `ZAPIER_IMPORT_TOKEN`, `ZAPIER_RESTAURANT_ID`, and `ZAPIER_TABLE_ID` where the app runs, then restart it.
+5. **In the existing Zap,** keep all three current steps unchanged, including the Tables "Update Record" step, and **add a final step**:
+   - **App:** API by Zapier. **Action:** its HTTP request action (the exact action and field names in Zapier's editor may differ; I couldn't check them).
+   - **Method:** `POST`.
+   - **URL:** `https://<your-railway-domain>/api/integrations/zapier/inquiries`. Zapier's servers can't reach `localhost`.
+   - **Headers:** `Authorization: Bearer <ZAPIER_IMPORT_TOKEN>` and `Content-Type: application/json`.
+   - **Body (JSON):** `recordId` = the record ID from the "New Record" trigger, `inquiryMessage` = the inquiry text field from the trigger, and `aiReview` = the AI step's output.
+
+     If the action can build the JSON from key/value fields, use that, so Zapier escapes quotes and line breaks. A hand-typed raw JSON body with mapped text breaks on quotes or newlines.
+6. **Test the step in Zapier.** The first test should return 201 `created`, and a re-test 200 `duplicate`. Then open `/inquiries` as the restaurant owner, press **Refresh**, and check the labels and the line breaks.
+7. **Rotating the token:** change it in Railway (or `.env.local`) and in the Zap's header at the same time.
+
+## Deploying to Railway (demonstration)
+
+This is preparation only: nothing has been deployed or configured. The deployment is a clearly labelled **demonstration** that uses the existing **Neon development branch**. It is **not** a production database. The local app and the deployed app share the same data.
+
+**What's prepared in the repository:**
+- **Node 24:** `engines.node` is `"24.x"` and `.nvmrc` is `24`. Also set `RAILPACK_NODE_VERSION=24`, the variable Railpack checks first.
+- **Build:** Railpack (Railway's default builder) runs `npm ci`, whose `postinstall` runs `prisma generate`, and then `npm run build`, which is `prisma generate && next build`. The build needs no database or secrets.
+- **Start:** `npm run start`, which is `next start`. It listens on Railway's injected `PORT` and binds `0.0.0.0` by default (per the bundled Next.js CLI docs).
+- **Migrations:** these are kept out of the build. `npm run db:deploy` (`prisma migrate deploy`) is the pre-deploy command. `prisma` and `@next/env` (which `prisma7.config.ts` uses) are in `dependencies`, so they're installed in the image even if dev dependencies are pruned.
+- **Health:** `GET /api/health` returns `{"status":"ok"}`. It doesn't query the database or report configuration.
+- **No extra infrastructure:** no Dockerfile and no standalone output. No `railway.json` either: Railway's docs mark config-as-code as deprecated (legacy files stop being read on 2026-12-01, and new services can't opt in). The settings below are entered in the Railway dashboard.
+
+### Steps (project owner)
+
+1. **Create the service.** In Railway, create a project and a service from the GitHub repository and branch. Keep the default builder (Railpack).
+2. **Generate a domain.** Under Settings → Networking → Public Networking, choose **Generate Domain**, and note it (`<name>.up.railway.app`).
+3. **Add the variables** (Variables tab). Don't set `PORT`, which Railway injects, and never use a `NEXT_PUBLIC_` prefix.
+
+   | Variable | Value |
+   | --- | --- |
+   | `RAILPACK_NODE_VERSION` | `24` |
+   | `DATABASE_URL` | Neon **development** pooled connection string |
+   | `DIRECT_URL` | Neon **development** direct connection string, used by the pre-deploy migration |
+   | `BETTER_AUTH_SECRET` | A new random value for this deployment, at least 32 characters |
+   | `BETTER_AUTH_URL` | `https://<name>.up.railway.app`, the exact domain with no trailing slash |
+   | `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | The OAuth client's values |
+   | `ZAPIER_IMPORT_TOKEN` / `ZAPIER_RESTAURANT_ID` / `ZAPIER_TABLE_ID` | See [Zapier pilot import](#zapier-pilot-import) |
+
+4. **Fill in the deploy settings.** Leave the build and start commands at their defaults (`npm run build` and `npm run start`).
+   - **Pre-deploy command:** `npm run db:deploy`. It runs between build and deploy with the service's variables, and a failure stops the deploy.
+   - **Healthcheck path:** `/api/health`.
+5. **Update Google Cloud.** In the OAuth client, add the authorized redirect URI `https://<name>.up.railway.app/api/auth/callback/google`, and keep the localhost one for local development. In Testing mode, only listed test users can sign in.
+6. **Deploy.** Then check:
+   - `https://<name>.up.railway.app/api/health` returns `{"status":"ok"}`.
+   - Sign-in, the restaurant panel, `/inquiries`, and sign-out all work on the Railway domain.
+   - The browser's session cookie is `Secure` (Better Auth sets it automatically because `BETTER_AUTH_URL` is HTTPS).
+
+**Security notes:**
+- The deployed instance trusts only its own HTTPS origin, so `localhost` isn't a trusted origin there.
+- Next.js still checks every Server Action's Origin header.
+
+**Unverified for Railway:**
+- Railpack's install and pre-deploy behavior for this project, including npm 11's held-back install scripts. `prisma migrate deploy` needs Prisma's schema engine for Linux, which the Prisma CLI normally fetches when it's missing.
+- Healthcheck timing.
+- Cookies behind Railway's proxy.
 
 ## Project structure
 
 ```
 prisma/
   schema.prisma        Restaurant, Inquiry, auth, and RestaurantMembership models, plus enums
-  migrations/          Version-controlled SQL migrations (init and auth applied to Neon development; membership pending)
+  migrations/          Version-controlled SQL migrations (init, auth, and membership applied to Neon development; Zapier import pending)
 prisma7.config.ts      Prisma CLI config: schema path, migrations path, DIRECT_URL, env loading
+.nvmrc                 Node 24, matching engines.node
 scripts/
   db-check.ts          Manual, read-only pooled-connection check (`npm run db:check`)
 tests/
   auth.test.ts         Offline auth tests (`npm test`)
   restaurants.test.ts  Offline restaurant setup and scope tests (mocked database)
+  zapier-import.test.ts Offline import endpoint and inquiry read tests (mocked database)
 src/
   app/                 Routes (App Router). page.tsx is the dashboard.
     <module>/page.tsx  Placeholder pages for planned modules
     sign-in/page.tsx   Google sign-in, setup status, and sign-out
     setup/page.tsx     Restaurant setup (one restaurant per account)
+    inquiries/page.tsx Read-only, restaurant-scoped review of imported inquiries
+    api/health/        Process health for Railway (no database)
+    api/integrations/zapier/inquiries/  Zapier pilot import (bearer token, fixed restaurant)
     api/auth/[...all]/ Better Auth endpoints (Google sign-in and callback, session, sign-out)
   components/          App shell, navigation, and shared UI primitives
     auth/              Account panel, Google sign-in button, sign-out button
     restaurant/        Restaurant setup form
+    inquiries/         Inquiry review card and Refresh button
   generated/prisma/    Generated Prisma Client (git-ignored; created by `prisma generate`)
   lib/
-    db.ts              Server-only, lazily created Prisma client with bounded timeouts (used by Better Auth, restaurant setup, and scripts/db-check.ts)
+    db.ts              Server-only, lazily created Prisma client with bounded timeouts (Better Auth, restaurant setup, inquiries, Zapier import, db-check)
     auth.ts            Server-only Better Auth setup (lazy), session verification, /api/auth handler
     auth-config.ts     Server-only checks of the auth environment variables
     auth-actions.ts    Sign-out Server Action
@@ -355,6 +518,8 @@ src/
     restaurants.ts     Server-only restaurant name validation, membership lookup, and setup transaction
     restaurant-access.ts getRestaurantAccess() / requireRestaurant(): restaurant scope from the session
     restaurant-actions.ts Restaurant setup Server Action
+    zapier-import.ts   Server-only Zapier import: config, token check, size limit, validation, idempotent insert
+    inquiries.ts       Server-only restaurant-scoped inquiry reads and timestamp formatting
     navigation.ts      Nav items and each module's status (preview / planned)
     demo-data.ts       Fictional sample inquiries (remove when real data exists)
 ```
@@ -364,20 +529,20 @@ src/
 - Authentication is verified only locally, against Neon development (manual checks by the project owner).
   - Production and Railway authentication are untested.
   - Working sign-in doesn't establish write persistence for restaurant or inquiry data, which is untested.
-- Restaurant setup is implemented but **unverified live**.
-  - The membership migration (`20261106155051_add_restaurant_membership`) isn't applied, so setup writes, the transaction's rollback, and the one-restaurant-per-user unique constraint haven't run against a real database. Offline tests use a mocked database.
-  - One restaurant per account, owner role only. No invitations, staff roles, switching, renaming, or deletion.
-- No real inquiry data.
-  - No page reads or writes inquiry records, and the dashboard still shows fictional demonstration data to every visitor, signed in or not.
-  - The CLI's direct connection and the app's pooled connection are verified, but only with read-only counts (`npm run db:check`).
-- Restaurant scope exists (`requireRestaurant()`), but nothing uses it for inquiries yet. Inquiry tenant isolation isn't implemented or tested.
+- Restaurant setup is partly verified live: the project owner applied its migration and created one restaurant. The repeat and concurrent paths, the transaction rollback, the unique constraint, and second-account isolation haven't been reported. One restaurant per account, owner role only. No invitations, staff roles, switching, renaming, or deletion.
+- The Zapier pilot import and `/inquiries` are **unverified live**.
+  - Their migration (`20261106165710_add_zapier_inquiry_import`) isn't applied and Zapier isn't connected.
+  - The unique index, real retries, and restaurant isolation of the review screen haven't run against a real database. Offline tests use a mocked database.
+- The pilot covers one restaurant and one table, with one shared token. It isn't a general multi-tenant integration.
+- All pilot inquiries are fictional demonstration records. The dashboard still shows its own fictional data to every visitor.
+- Nothing is extracted from inquiries or AI reviews: no dates, names, counts, prices, or statuses. Inquiries can't be edited, approved, sent, quoted, or moved between stages.
+- Railway deployment is prepared but **not done**. It would use the Neon **development** branch for a demonstration, not a production database.
 - Sessions last 7 days from sign-in and aren't extended by activity. Server-side reads deliberately don't refresh them.
-- No email, web form, or AI integration. Source labels in the pipeline are illustrative.
-- Inquiries cannot be opened, created, edited, or moved between stages.
+- No email, web form, or in-app AI integration. Source labels in the dashboard pipeline are illustrative.
 - Light theme only.
-- Automated tests (`npm test`) cover the auth wiring and restaurant setup and scope, offline. Restaurant tests use a mocked database. Verification is otherwise lint plus a production build.
+- Automated tests (`npm test`) cover the auth wiring, restaurant setup and scope, the Zapier import, and inquiry reads, offline. Restaurant and import tests use a mocked database. Verification is otherwise lint plus a production build.
 - `npm audit` reports moderate advisories in the ESLint/TypeScript-ESLint dev toolchain. They don't affect the runtime bundle.
-- npm 11 holds back the install scripts of `prisma`, `@prisma/engines`, and `esbuild` (used by `tsx`) until you approve them (`npm approve-scripts`). Locally on Windows, the Prisma CLI and `tsx` work without them. Whether a Linux build environment such as Railway needs them hasn't been checked.
+- npm 11 holds back the install scripts of `prisma`, `@prisma/engines`, and `esbuild` (used by `tsx`) until you approve them (`npm approve-scripts`). Locally on Windows, the Prisma CLI and `tsx` work without them. Whether Railway's Linux build needs them hasn't been checked (see [Deploying to Railway](#deploying-to-railway-demonstration)).
 
 ## Contributor and agent guidance
 

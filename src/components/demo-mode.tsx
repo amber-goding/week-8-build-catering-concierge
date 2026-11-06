@@ -11,10 +11,11 @@ export function DemoBanner() {
       <p className="mx-auto flex max-w-6xl items-start gap-2.5 sm:items-center">
         <Icon name="flask" className="mt-0.5 size-4 shrink-0 sm:mt-0" />
         <span>
-          <strong className="font-semibold">Demonstration mode.</strong> All inquiries, names, and
-          figures shown are fictional sample data. Your Google sign-in and, once you set it up, your
-          restaurant&apos;s name are real records. No real inquiries are stored, and no email inbox or AI
-          service is connected.
+          <strong className="font-semibold">Demonstration mode.</strong> The dashboard&apos;s inquiries,
+          names, and figures are fictional sample data. Your Google sign-in and restaurant name are real
+          records. Inquiries imported through the Zapier pilot are stored for your restaurant, but
+          they&apos;re fictional demonstration records and are labelled that way. No email inbox is
+          connected, and the app itself calls no AI service.
         </span>
       </p>
     </div>

@@ -8,7 +8,7 @@ import {
   type DemoInquiry,
   type InquirySource,
 } from "@/lib/demo-data";
-import { primaryNav, secondaryNav } from "@/lib/navigation";
+import { moduleStatusLabel, primaryNav, secondaryNav } from "@/lib/navigation";
 
 const dateFormatter = new Intl.DateTimeFormat("en-US", {
   weekday: "short",
@@ -44,7 +44,7 @@ export default function DashboardPage() {
       <PageHeader
         eyebrow="Dashboard"
         title="Catering overview"
-        description="A preview of how catering inquiries will move from first contact to a confirmed event. Everything on this page is fictional sample data."
+        description="A preview of how catering inquiries will move from first contact to a confirmed event. Everything on this page is fictional sample data. Inquiries imported through the Zapier pilot are listed separately on the Inquiries page."
         badge={<Badge tone="sample">Sample data</Badge>}
       />
 
@@ -125,7 +125,7 @@ export default function DashboardPage() {
           <SectionHeading
             id="sources-heading"
             title="Inquiry sources"
-            description="Channels inquiries will arrive from. None are connected yet."
+            description="Channels inquiries will arrive from. Only a limited Zapier pilot import exists so far."
           />
           <Card>
             <ul className="divide-y divide-linen">
@@ -163,7 +163,7 @@ export default function DashboardPage() {
                       </span>
                       <span className="flex-1 text-sm font-medium text-ink">{item.label}</span>
                       <span className="text-xs text-muted">
-                        {item.status === "planned" ? "Planned" : "Preview"}
+                        {moduleStatusLabel[item.status]}
                       </span>
                       <Icon
                         name="arrow-right"
@@ -181,6 +181,7 @@ export default function DashboardPage() {
 }
 
 const sourceStatus: { name: string; detail: string; status: string }[] = [
+  { name: "Zapier pilot import", detail: "Fictional records from one Zapier table, for one restaurant", status: "Pilot" },
   { name: "Connected email", detail: "Gmail via OAuth", status: "Not connected" },
   { name: "Web form", detail: "Embeddable inquiry form", status: "Not built" },
   { name: "Manual entry", detail: "Staff-entered inquiries", status: "Not built" },

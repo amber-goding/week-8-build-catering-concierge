@@ -49,7 +49,7 @@ const scope = [
   "Confirms your identity with Google. Only your name, email address, and profile are requested.",
   "Keeps you signed in on this browser for up to 7 days, or until you sign out.",
   "Doesn't connect Gmail or read your email.",
-  "Lets you set up one restaurant, which you then own. Inquiry data isn't real yet: the dashboard stays fictional sample data, and every page stays viewable without signing in.",
+  "Lets you set up one restaurant, which you then own, and read its imported pilot inquiries (fictional demonstration records). The dashboard stays fictional sample data and, like the planned modules, viewable without signing in.",
 ];
 
 async function SignInPanel({ searchParams }: { searchParams: PageProps<"/sign-in">["searchParams"] }) {
